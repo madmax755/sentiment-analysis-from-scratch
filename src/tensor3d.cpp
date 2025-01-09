@@ -42,8 +42,18 @@ size_t Tensor3D::index(size_t d, size_t h, size_t w) { return d * (height * widt
 const size_t Tensor3D::index(size_t d, size_t h, size_t w) const { return d * (height * width) + h * (width) + w; }
 
 // access elements using 3D coordinates
-float &Tensor3D::operator()(size_t d, size_t h, size_t w) { return data[index(d, h, w)]; }
-const float &Tensor3D::operator()(size_t d, size_t h, size_t w) const { return data[index(d, h, w)]; }
+float &Tensor3D::operator()(size_t d, size_t h, size_t w) {
+    if (d >= depth or h >= height or w >= width) {
+        throw std::runtime_error("index out of range in Tensor3D::operator()");
+    }
+    return data[index(d, h, w)];
+}
+const float &Tensor3D::operator()(size_t d, size_t h, size_t w) const {
+    if (d >= depth or h >= height or w >= width) {
+        throw std::runtime_error("index out of range in Tensor3D::operator()");
+    }
+    return data[index(d, h, w)];
+}
 
 // extract 2D slice at given depth
 Tensor3D Tensor3D::operator()(size_t d) {

@@ -9,7 +9,6 @@
                 "-g",
                 "${workspaceFolder}/src/*.cpp",
                 "-I${workspaceFolder}/include",
-                "-O3",
                 "-o",
                 "${workspaceFolder}/bin/main.exe"
             ],

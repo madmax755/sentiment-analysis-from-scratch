@@ -1,4 +1,4 @@
-import pandas as pd
+import pandas as pd # type: ignore
 import re
 
 df = pd.read_csv("data/imdb_raw.csv")
