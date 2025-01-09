@@ -53,8 +53,16 @@ public:
     
     // transformations
     Tensor3D apply(float (*func)(float)) const;
+
     template <typename Func>
-    Tensor3D apply(Func func) const;
+    Tensor3D apply(Func func) const {
+        Tensor3D result(depth, height, width);
+        for (size_t i = 0; i < data.size(); ++i) {
+            result.data[i] = func(data[i]);
+        }
+        return result;
+    }
+
     Tensor3D transpose() const;
     Tensor3D softmax() const;
     Tensor3D flatten() const;

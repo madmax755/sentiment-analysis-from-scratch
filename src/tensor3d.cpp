@@ -264,19 +264,6 @@ Tensor3D Tensor3D::apply(float (*func)(float)) const {
     return result;
 }
 
-template <typename Func>
-Tensor3D Tensor3D::apply(Func func) const {
-    Tensor3D result(depth, height, width);
-    for (size_t d = 0; d < depth; d++) {
-        for (size_t i = 0; i < height; i++) {
-            for (size_t j = 0; j < width; j++) {
-                result(d, i, j) = func((*this)(d, i, j));
-            }
-        }
-    }
-    return result;
-}
-
 Tensor3D Tensor3D::transpose() const {
     Tensor3D result(depth, width, height);
     for (size_t d = 0; d < depth; d++) {

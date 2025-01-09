@@ -1,8 +1,17 @@
 #include "../include/tokeniser.hpp"
-
+#include "../include/tensor3d.hpp"
 
 Tokeniser::Tokeniser(const std::string& glove_path) {
     loadGloveEmbeddings(glove_path);
+}
+
+std::vector<Tensor3D> Tokeniser::string_to_embeddings(const std::string& text) {
+    std::vector<std::string> tokens = tokenise(text);
+    std::vector<Tensor3D> embeddings;
+    for (const std::string& token : tokens) {
+        embeddings.push_back(Tensor3D(1, embedding_dim, 1, getEmbedding(token)));
+    }
+    return embeddings;
 }
 
 // simple word tokenisation
@@ -33,6 +42,11 @@ std::vector<float> Tokeniser::getEmbedding(const std::string& word) {
 
 void Tokeniser::loadGloveEmbeddings(const std::string& path) {
     std::ifstream file(path);
+
+    if (!file.is_open()) {
+        throw std::runtime_error("could not open embeddings file: " + path);
+    }
+
     std::string line;
     
     // read glove file line by line
@@ -48,6 +62,6 @@ void Tokeniser::loadGloveEmbeddings(const std::string& path) {
         embeddings[word] = vector;
     }
 
-    // initialise unknown token as zeros (or you could use random/mean)
+    // initialise unknown token as zeros (could use random/mean)
     unk_embedding = std::vector<float>(embedding_dim, 0.0f);
 }
