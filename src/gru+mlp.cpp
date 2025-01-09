@@ -1094,7 +1094,7 @@ class Predictor {
         return mlp.feedforward(h_t);
     }
 
-    // process sequence and return final hidden state
+    // process sequence and return final hidden state (used for backpropagation)
     Tensor3D feedforward_gru(const std::vector<Tensor3D>& input_sequence) {
         Tensor3D h_t(hidden_size, 1);
 
@@ -1173,37 +1173,77 @@ class Predictor {
 
                 std::cout << "\rBatch " << i / batch_size << "/" << no_examples / batch_size << " complete" << std::flush;
             }
-            std::cout << "\rEpoch " << epoch << "/" << epochs << " complete" << std::endl;
-            // auto test_metrics = evaluate(test_data);
-            // std::cout << test_metrics << std::endl;
+            std::cout << "\rEpoch " << epoch << "/" << epochs << " complete    " << std::endl;
+            auto test_metrics = evaluate(test_data);
+            std::cout << test_metrics << "\n\n"<< std::endl;
         }
     }
 
-    // add this to your Predictor class
     struct EvaluationMetrics {
-        float mse;
-        float mae;
-        float rmse;
-        float profit_loss;
+        float loss;
         float accuracy;
-        int total_trades;
-        float avg_trade_return;  // added: average return per trade
+        float precision;
+        float recall;
+        float f1_score;
 
         friend std::ostream& operator<<(std::ostream& os, const EvaluationMetrics& metrics) {
-            os << "----------------\n"
-               << "MSE: " << metrics.mse << "\n"
-               << "MAE: " << metrics.mae << "\n"
-               << "RMSE: " << metrics.rmse << "\n"
-               << "Profit/Loss: " << (metrics.profit_loss * 100) << "%\n"
-               << "Direction Accuracy: " << (metrics.accuracy * 100) << "%\n"
-               << "Total Trades: " << metrics.total_trades << "\n"
-               << "Avg Trade Return: " << (metrics.avg_trade_return * 100) << "%\n"
-               << "----------------";
+            os << "Loss: " << metrics.loss << "\n"
+               << "Accuracy: " << metrics.accuracy * 100.0f << "%\n"
+               << "Precision: " << metrics.precision * 100.0f << "%\n"
+               << "Recall: " << metrics.recall * 100.0f << "%\n"
+               << "F1 Score: " << metrics.f1_score * 100.0f << "%";
             return os;
         }
     };
 
-    
+    EvaluationMetrics evaluate(const std::vector<TrainingExample>& test_data) {
+        EvaluationMetrics metrics = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        float true_positives = 0.0f;
+        float false_positives = 0.0f;
+        float false_negatives = 0.0f;
+        size_t total = test_data.size();
+
+        for (const auto& example : test_data) {
+            // get prediction and compute loss
+            Tensor3D prediction = predict(example.sequence);
+            metrics.loss += this->loss->compute(prediction, example.target);
+
+            // get predicted and actual class (assuming binary classification)
+            bool predicted_positive = prediction(0, 0, 0) > prediction(0, 1, 0);
+            bool actual_positive = example.target(0, 0, 0) > example.target(0, 1, 0);
+
+            // update metrics
+            if (predicted_positive == actual_positive) {
+                metrics.accuracy += 1.0f;
+            }
+
+            if (predicted_positive && actual_positive) {
+                true_positives += 1.0f;
+            } else if (predicted_positive && !actual_positive) {
+                false_positives += 1.0f;
+            } else if (!predicted_positive && actual_positive) {
+                false_negatives += 1.0f;
+            }
+        }
+
+        // average the loss
+        metrics.loss /= total;
+        
+        // calculate accuracy
+        metrics.accuracy /= total;
+
+        // calculate precision
+        metrics.precision = true_positives / (true_positives + false_positives + 1e-10f);
+
+        // calculate recall
+        metrics.recall = true_positives / (true_positives + false_negatives + 1e-10f);
+
+        // calculate f1 score
+        metrics.f1_score = 2.0f * (metrics.precision * metrics.recall) / 
+                          (metrics.precision + metrics.recall + 1e-10f);
+
+        return metrics;
+    }
 };
 
 // reads csv file for columns headed 'review' and 'sentiment', tokenises, then returns training examples.
@@ -1294,7 +1334,7 @@ int main() {
     // load embeddings and training data
     // paths are relative to compiled executable location
     Tokeniser tokeniser("../data/glove.6B.100d.txt");
-    std::vector<TrainingExample> all_examples = training_examples_from_csv("../data/imdb_clean.csv", tokeniser, 100);
+    std::vector<TrainingExample> all_examples = training_examples_from_csv("../data/imdb_clean.csv", tokeniser, 1000);
 
     // split into training and test data
     size_t size = all_examples.size();
