@@ -11,6 +11,7 @@
 
 #include "../include/tensor3d.hpp"
 #include "../include/tokeniser.hpp"
+#include "../include/loss.hpp"
 
 // sigmoid activation function
 float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
@@ -407,58 +408,6 @@ class Layer {
         }
 
         return {output, z};
-    }
-};
-
-// -----------------------------------------------------------------------------------------------------
-// ---------------------------------------- LOSS FUNCTIONS ----------------------------------------------
-
-class Loss {
-   public:
-    virtual ~Loss() = default;
-
-    // Compute the loss value
-    virtual float compute(const Tensor3D& predicted, const Tensor3D& target) const = 0;
-
-    // Compute the derivative of the loss with respect to the predicted values
-    virtual Tensor3D derivative(const Tensor3D& predicted, const Tensor3D& target) const = 0;
-};
-
-class CrossEntropyLoss : public Loss {
-   public:
-    float compute(const Tensor3D& predicted, const Tensor3D& target) const override {
-        float loss = 0.0f;
-        for (size_t i = 0; i < predicted.height; ++i) {
-            for (size_t j = 0; j < predicted.width; ++j) {
-                // add small epsilon (1e-10) to prevent log(0)
-                loss -= target(0, i, j) * std::log(predicted(0, i, j) + 1e-10f);
-            }
-        }
-        return loss / predicted.width;  // average loss over batch
-    }
-
-    Tensor3D derivative(const Tensor3D& predicted, const Tensor3D& target) const override {
-        // when combined with softmax output, gradient simplifies to (predicted - target)
-        // this is because d(cross_entropy)/d(softmax_input) = predicted - target
-        return predicted - target;
-    }
-};
-
-class MSELoss : public Loss {
-   public:
-    float compute(const Tensor3D& predicted, const Tensor3D& target) const override {
-        float loss = 0.0f;
-        for (size_t i = 0; i < predicted.height; ++i) {
-            for (size_t j = 0; j < predicted.width; ++j) {
-                float dif = predicted(0, i, j) - target(0, i, j);
-                loss += dif * dif;
-            }
-        }
-        return loss / (2.0f * predicted.width);  // Average over batch and divide by 2
-    }
-
-    Tensor3D derivative(const Tensor3D& predicted, const Tensor3D& target) const override {
-        return (predicted - target) * (1.0f / predicted.width);
     }
 };
 
@@ -1079,11 +1028,17 @@ public:
     }
 
     // load next batch of examples
-    std::vector<TrainingExample> next_batch() {
+    std::vector<TrainingExample> next_batch(int no_examples = -1) {
+
+        // by default, load a full batch 
+        if (no_examples == -1) {
+            no_examples = batch_size;
+        }
+
         std::vector<TrainingExample> batch;
         
         if (current_index >= indices.size()) {
-            return batch;
+            return batch; // return empty batch if we've processed all data - use to trigger end of epoch
         }
         
         size_t examples_to_process = std::min(batch_size, indices.size() - current_index);
@@ -1338,7 +1293,6 @@ class Predictor {
 
         for (int epoch = 0; epoch < epochs; epoch++) {
             int batch_count = 0;
-            float epoch_loss = 0.0f;
 
             while (true) {
                 auto batch = train_loader.next_batch();
@@ -1363,7 +1317,21 @@ class Predictor {
                 update_parameters(averaged_gru_gradients, averaged_mlp_gradients);
 
                 batch_count++;
-                std::cout << "\rBatch " << batch_count << "/" << full_batches << " complete" << std::flush;
+
+                if (batch_count % 10 == 0) {
+                    std::cout << "\rBatch " << batch_count << "/" << full_batches << " complete";
+                    // evaluate on test set
+                    float total_accuracy = 0.0f;
+                    int test_batches = 0;
+                    test_loader.reset();  // reset test loader to beginning
+                    
+                    auto test_batch = test_loader.next_batch(200);
+                    auto metrics = evaluate(test_batch);
+                    std::cout << " - Test Accuracy: " << metrics.accuracy * 100.0f << "%\n" << std::endl;
+                
+                } else {
+                    std::cout << "\rBatch " << batch_count << "/" << full_batches << " complete" << std::flush;
+                }
             }
 
             std::cout << "\rEpoch " << epoch + 1 << "/" << epochs << " complete    " << std::endl;
@@ -1383,7 +1351,7 @@ class Predictor {
             }
             
             float avg_accuracy = total_accuracy / test_batches;
-            std::cout << "Test Accuracy: " << avg_accuracy * 100.0f << "%\n" << std::endl;
+            std::cout << " - Test Accuracy: " << avg_accuracy * 100.0f << "%\n" << std::endl;
             
             // reset train loader for next epoch
             train_loader.reset();
@@ -1542,17 +1510,18 @@ std::vector<TrainingExample> training_examples_from_csv(const std::string& filen
 }
 
 int main() {
+
     // load embeddings and training data
     // paths are relative to compiled executable location
     Tokeniser tokeniser("../data/glove.6B.100d.txt");
     std::vector<TrainingExample> all_examples = training_examples_from_csv("../data/imdb_clean.csv", tokeniser, 1000);
 
-    const size_t batch_size = 50;
+    const size_t batch_size = 100;
     const size_t epochs = 75;
 
     // load training and test data
     BatchDataLoader training_loader("../data/imdb_clean_train.csv", tokeniser, batch_size);
-    BatchDataLoader test_loader("../data/imdb_clean_test.csv", tokeniser, batch_size);
+    BatchDataLoader test_loader("../data/imdb_clean_test.csv", tokeniser, 200);
 
     auto input_features = 100;
     size_t hidden_size = 128;
