@@ -33,10 +33,14 @@ def clean_sentiment(sentiment):
     else:
         return None
 
+# clean data
 df["review"] = df["review"].apply(clean_text)
 df["sentiment"] = df["sentiment"].apply(clean_sentiment)
 
-print("\nFirst 5 cleaned reviews:")
-print(df.head(5))
+# split into training and test data
+train_df = df.sample(frac=0.9, random_state=42)
+test_df = df.drop(train_df.index)
 
-df.to_csv("data/imdb_clean.csv")
+# save to csv
+train_df.to_csv("data/imdb_clean_train.csv")
+test_df.to_csv("data/imdb_clean_test.csv")

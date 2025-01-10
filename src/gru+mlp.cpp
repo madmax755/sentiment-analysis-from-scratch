@@ -93,6 +93,52 @@ struct GRUGradients {
     }
 };
 
+struct MLPGradients {
+    std::vector<std::vector<Tensor3D>> gradients;
+
+    MLPGradients operator+(const MLPGradients& other) const {
+        MLPGradients result;
+        if (gradients.empty()) {
+            result.gradients = other.gradients;
+            return result;
+        }
+        if (other.gradients.empty()) {
+            result.gradients = gradients;
+            return result;
+        }
+
+        // check if the number of layers are the same
+        if (gradients.size() != other.gradients.size()) {
+            throw std::runtime_error("MLPGradients layers don't match for addition");
+        }
+
+        result.gradients.reserve(gradients.size());
+        for (size_t i = 0; i < gradients.size(); i++) {
+            std::vector<Tensor3D> layer_grads;
+            layer_grads.reserve(gradients[i].size());
+            for (size_t j = 0; j < gradients[i].size(); j++) {
+                layer_grads.push_back(gradients[i][j] + other.gradients[i][j]);
+            }
+            result.gradients.push_back(layer_grads);
+        }
+        return result;
+    }
+
+    MLPGradients operator*(float scalar) const {
+        MLPGradients result;
+        result.gradients.reserve(gradients.size());
+        for (size_t i = 0; i < gradients.size(); i++) {
+            std::vector<Tensor3D> layer_grads;
+            layer_grads.reserve(gradients[i].size());
+            for (size_t j = 0; j < gradients[i].size(); j++) {
+                layer_grads.push_back(gradients[i][j] * scalar);
+            }
+            result.gradients.push_back(layer_grads);
+        }
+        return result;
+    }
+};
+
 class GRUCell {
    private:
     // store sequence of states for BPTT
@@ -380,7 +426,7 @@ class Loss {
 
 class CrossEntropyLoss : public Loss {
    public:
-    float compute(const Tensor3D &predicted, const Tensor3D &target) const override {
+    float compute(const Tensor3D& predicted, const Tensor3D& target) const override {
         float loss = 0.0f;
         for (size_t i = 0; i < predicted.height; ++i) {
             for (size_t j = 0; j < predicted.width; ++j) {
@@ -391,7 +437,7 @@ class CrossEntropyLoss : public Loss {
         return loss / predicted.width;  // average loss over batch
     }
 
-    Tensor3D derivative(const Tensor3D &predicted, const Tensor3D &target) const override {
+    Tensor3D derivative(const Tensor3D& predicted, const Tensor3D& target) const override {
         // when combined with softmax output, gradient simplifies to (predicted - target)
         // this is because d(cross_entropy)/d(softmax_input) = predicted - target
         return predicted - target;
@@ -434,8 +480,7 @@ class MLPOptimiser {
     virtual ~MLPOptimiser() = default;
 
     struct GradientResult {
-        std::vector<std::vector<Tensor3D>>
-            gradients;                  // list of layers, each layer has a list of weight and bias gradient matrices
+        MLPGradients gradients;          // list of layers, each layer has a list of weight and bias gradient matrices
         Tensor3D input_layer_gradient;  // gradient of the input layer - for more general use as parts of bigger architectures
         Tensor3D output;                // output of the network
     };
@@ -496,10 +541,10 @@ class MLPOptimiser {
         std::reverse(deltas.begin(), deltas.end());
 
         // calculate gradients
-        std::vector<std::vector<Tensor3D>> gradients;
+        MLPGradients gradients;
         for (int l = 0; l < num_layers; ++l) {
             Tensor3D weight_gradient = deltas[l] * activations[l].transpose();
-            gradients.push_back({weight_gradient, deltas[l]});
+            gradients.gradients.push_back({weight_gradient, deltas[l]});
         }
 
         // as we don't treat the input as a layer, we need to return the input layer errors separately
@@ -507,34 +552,6 @@ class MLPOptimiser {
 
         // return a GradientResult struct for purposes of tracking loss
         return {gradients, input_delta, activations.back()};
-    }
-
-    /**
-     * @brief Averages gradients from multiple examples.
-     * @param batch_gradients A vector of gradients from multiple examples.
-     * @return The averaged gradients.
-     */
-    std::vector<std::vector<Tensor3D>> average_gradients(const std::vector<std::vector<std::vector<Tensor3D>>>& batch_gradients) {
-        std::vector<std::vector<Tensor3D>> avg_gradients;
-        size_t num_layers = batch_gradients[0].size();
-        size_t batch_size = batch_gradients.size();
-
-        for (size_t l = 0; l < num_layers; ++l) {
-            Tensor3D avg_weight_grad(batch_gradients[0][l][0].height, batch_gradients[0][l][0].width);
-            Tensor3D avg_bias_grad(batch_gradients[0][l][1].height, batch_gradients[0][l][1].width);
-
-            for (const auto& example_gradients : batch_gradients) {
-                avg_weight_grad = avg_weight_grad + example_gradients[l][0];
-                avg_bias_grad = avg_bias_grad + example_gradients[l][1];
-            }
-
-            avg_weight_grad = avg_weight_grad * (1.0f / batch_size);
-            avg_bias_grad = avg_bias_grad * (1.0f / batch_size);
-
-            avg_gradients.push_back({avg_weight_grad, avg_bias_grad});
-        }
-
-        return avg_gradients;
     }
 };
 
@@ -617,6 +634,7 @@ class MLPSGDMomentumOptimiser : public MLPOptimiser {
      * @param gradients The gradients used for updating the layers.
      */
     void compute_and_apply_updates(std::vector<Layer>& layers, const std::vector<std::vector<Tensor3D>>& gradients) override {
+        // initialise velocity if needed
         if (velocity.empty()) {
             initialise_velocity(layers);
         }
@@ -984,6 +1002,144 @@ class GRUAdamWOptimiser : public GRUOptimiser {
 
 // -----------------------------------------------------------------------------------------------------
 
+// load only batches of examples from csv file at a time - avoids lack of memory issues
+class BatchDataLoader {
+   public:
+    size_t batch_size;
+    size_t no_examples;
+   private:
+    std::string filename;
+    Tokeniser& tokeniser;
+    std::ifstream file;
+    std::string header;
+    int review_idx;
+    int sentiment_idx;
+    
+    // store the byte offset of each line in the file
+    std::vector<std::streampos> line_positions;
+    std::vector<size_t> indices;
+    size_t current_index;
+    
+    // initialise line positions - only done once when loader is created
+    void init_line_positions() {
+        std::string line;
+        
+        // store header position
+        std::streampos header_pos = file.tellg();
+        std::getline(file, line);
+        
+        // store all other line positions
+        while (file.good()) {
+            std::streampos pos = file.tellg();
+            std::getline(file, line);
+            if (!line.empty()) {
+                line_positions.push_back(pos);
+            }
+        }
+        
+        // prepare indices for shuffling
+        indices.resize(line_positions.size());
+        std::iota(indices.begin(), indices.end(), 0);
+
+        no_examples = indices.size();
+    }
+
+public:
+    BatchDataLoader(const std::string& filename, Tokeniser& tokeniser, size_t batch_size) 
+        : filename(filename), tokeniser(tokeniser), batch_size(batch_size), 
+          file(filename), current_index(0) {
+        
+        if (!file.is_open()) {
+            throw std::runtime_error("could not open file: " + filename);
+        }
+
+        // read and process header
+        std::getline(file, header);
+        std::stringstream header_stream(header);
+        std::string field;
+        review_idx = -1;
+        sentiment_idx = -1;
+        int col_idx = 0;
+
+        while (std::getline(header_stream, field, ',')) {
+            if (field == "review") {
+                review_idx = col_idx;
+            } else if (field == "sentiment") {
+                sentiment_idx = col_idx;
+            }
+            col_idx++;
+        }
+
+        if (review_idx == -1 || sentiment_idx == -1) {
+            throw std::runtime_error("could not find required columns 'review' and 'sentiment' in csv header");
+        }
+
+        // initialise line positions and indices
+        init_line_positions();
+    }
+
+    // load next batch of examples
+    std::vector<TrainingExample> next_batch() {
+        std::vector<TrainingExample> batch;
+        
+        if (current_index >= indices.size()) {
+            return batch;
+        }
+        
+        size_t examples_to_process = std::min(batch_size, indices.size() - current_index);
+        
+        for (size_t i = 0; i < examples_to_process; ++i) {
+            // jump directly to the line we want using stored position
+            file.clear();  // clear any error flags
+            file.seekg(line_positions[indices[current_index + i]]);
+            
+            std::string line;
+            std::getline(file, line);
+            
+            std::stringstream row_stream(line);
+            std::string cell;
+            std::string review;
+            float sentiment;
+            int current_col = 0;
+
+            while (std::getline(row_stream, cell, ',')) {
+                if (current_col == review_idx) {
+                    review = cell;
+                } else if (current_col == sentiment_idx) {
+                    try {
+                        sentiment = std::stof(cell);
+                    } catch (const std::exception& e) {
+                        throw std::runtime_error("could not convert sentiment to float: " + cell);
+                    }
+                }
+                current_col++;
+            }
+
+            if (!review.empty()) {
+                Tensor3D target;
+                if (sentiment == 1) {
+                    target = Tensor3D(1, 2, 1, std::vector<float>{1, 0});
+                } else {
+                    target = Tensor3D(1, 2, 1, std::vector<float>{0, 1});
+                }
+
+                std::vector<Tensor3D> sequence = tokeniser.string_to_embeddings(review);
+                batch.push_back({sequence, target});
+            }
+        }
+        
+        current_index += examples_to_process;
+        return batch;
+    }
+
+    void reset() {
+        current_index = 0;
+        std::random_device rd;
+        std::mt19937 g(rd());
+        std::shuffle(indices.begin(), indices.end(), g);
+    }
+};
+
 class MLP {
    public:
     std::vector<Layer> layers;
@@ -1073,12 +1229,12 @@ class Predictor {
     void set_loss(std::unique_ptr<Loss> new_loss) { loss = std::move(new_loss); }
 
     // update GRU parameters using optimiser (can't be defined in GRUCell to avoid circular dependency)
-    void update_parameters(const GRUGradients& gru_grads, const std::vector<std::vector<Tensor3D>>& mlp_grads) {
+    void update_parameters(const GRUGradients& gru_grads, const MLPGradients& mlp_grads) {
         if (!gru_optimiser) {
             throw std::runtime_error("no optimiser set");
         }
         gru_optimiser->compute_and_apply_updates(gru, gru_grads);
-        mlp_optimiser->compute_and_apply_updates(mlp.layers, mlp_grads);
+        mlp_optimiser->compute_and_apply_updates(mlp.layers, mlp_grads.gradients);
     }
 
     // process sequence and return prediction (full feedforward pass)
@@ -1108,7 +1264,7 @@ class Predictor {
     }
 
     // gets the gradients for a single training example
-    std::pair<GRUGradients, std::vector<std::vector<Tensor3D>>> compute_gradients(const std::vector<Tensor3D>& input_sequence,
+    std::pair<GRUGradients, MLPGradients> compute_gradients(const std::vector<Tensor3D>& input_sequence,
                                                                                   const Tensor3D& target) {
         // forward pass
         Tensor3D final_hidden_state = feedforward_gru(input_sequence);
@@ -1121,6 +1277,7 @@ class Predictor {
         return {gru_gradients, mlp_gradients};
     }
 
+    // regular train method - provide train set a test set and off it goes
     void train(const std::vector<TrainingExample>& training_data, const std::vector<TrainingExample>& test_data, int epochs,
                int batch_size = 1) {
         // check if optimiser and loss function have been set
@@ -1145,37 +1302,91 @@ class Predictor {
                 size_t batch_end = std::min(i + batch_size, no_examples);
                 std::vector<size_t> batch_indices(indices.begin() + batch_start, indices.begin() + batch_end);
 
-                std::vector<GRUGradients> accumulated_gru_gradients;
-                std::vector<std::vector<std::vector<Tensor3D>>> accumulated_mlp_gradients;
-                accumulated_gru_gradients.reserve(batch_end - batch_start);
-                accumulated_mlp_gradients.reserve(batch_end - batch_start);
+                // initialise gradients to accumulate (and eventually average gradients from batch)
+                GRUGradients averaged_gru_gradients(input_size, hidden_size);
+                MLPGradients averaged_mlp_gradients;
 
+                // iterate over batch and compute gradients
                 for (const auto index : batch_indices) {
                     auto example = training_data[index];
                     auto [gru_gradients, mlp_gradients] = compute_gradients(example.sequence, example.target);
-                    accumulated_gru_gradients.push_back(gru_gradients);
-                    accumulated_mlp_gradients.push_back(mlp_gradients);
+                    averaged_gru_gradients = averaged_gru_gradients + gru_gradients;
+                    averaged_mlp_gradients = averaged_mlp_gradients + mlp_gradients;
                 }
 
-                // average accumulated grugradients
-                GRUGradients averaged_gru_gradients(input_size, hidden_size);
-                for (int i = 0; i < batch_end - batch_start; i++) {
-                    averaged_gru_gradients = averaged_gru_gradients + accumulated_gru_gradients[i];
-                }
-                averaged_gru_gradients = averaged_gru_gradients * (1.0f / (batch_end - batch_start));
+                // average gradients
+                averaged_gru_gradients = averaged_gru_gradients * (1.0f / batch_size);
+                averaged_mlp_gradients = averaged_mlp_gradients * (1.0f / batch_size);
 
-                // average accumulated mlp gradients
-                std::vector<std::vector<Tensor3D>> averaged_mlp_gradients =
-                    mlp_optimiser->average_gradients(accumulated_mlp_gradients);
-
-                // update GRU parameters using optimiser once batch gradients are averaged
+                // update parameters
                 update_parameters(averaged_gru_gradients, averaged_mlp_gradients);
 
                 std::cout << "\rBatch " << i / batch_size << "/" << no_examples / batch_size << " complete" << std::flush;
             }
             std::cout << "\rEpoch " << epoch << "/" << epochs << " complete    " << std::endl;
             auto test_metrics = evaluate(test_data);
-            std::cout << test_metrics << "\n\n"<< std::endl;
+            std::cout << "Accuracy: " << test_metrics.accuracy * 100.0f << "%  ";
+            std::cout << "precision: " << test_metrics.f1_score * 100.0f << "%\n\n" << std::endl;
+        }
+    }
+
+    void train_with_batches(BatchDataLoader& train_loader, BatchDataLoader& test_loader, int epochs) {
+        if (!gru_optimiser or !mlp_optimiser or !loss) {
+            throw std::runtime_error("optimiser or loss function not set");
+        }
+        size_t full_batches = train_loader.no_examples / train_loader.batch_size;
+
+        for (int epoch = 0; epoch < epochs; epoch++) {
+            int batch_count = 0;
+            float epoch_loss = 0.0f;
+
+            while (true) {
+                auto batch = train_loader.next_batch();
+                if (batch.empty()) break;  // end of epoch
+
+                // initialise gradients to accumulate (and eventually average gradients from batch)
+                GRUGradients averaged_gru_gradients(input_size, hidden_size);
+                MLPGradients averaged_mlp_gradients;
+                
+                // iterate over batch and compute gradients
+                for (const auto& example : batch) {
+                    auto [gru_gradients, mlp_gradients] = compute_gradients(example.sequence, example.target);
+                    averaged_gru_gradients = averaged_gru_gradients + gru_gradients;
+                    averaged_mlp_gradients = averaged_mlp_gradients + mlp_gradients;
+                }
+
+                // average gradients
+                averaged_gru_gradients = averaged_gru_gradients * (1.0f / batch.size());
+                averaged_mlp_gradients = averaged_mlp_gradients * (1.0f / batch.size());
+
+                // update parameters
+                update_parameters(averaged_gru_gradients, averaged_mlp_gradients);
+
+                batch_count++;
+                std::cout << "\rBatch " << batch_count << "/" << full_batches << " complete" << std::flush;
+            }
+
+            std::cout << "\rEpoch " << epoch + 1 << "/" << epochs << " complete    " << std::endl;
+            
+            // evaluate on test set
+            float total_accuracy = 0.0f;
+            int test_batches = 0;
+            test_loader.reset();  // reset test loader to beginning
+            
+            while (true) {
+                auto test_batch = test_loader.next_batch();
+                if (test_batch.empty()) break;
+                
+                auto metrics = evaluate(test_batch);
+                total_accuracy += metrics.accuracy;
+                test_batches++;
+            }
+            
+            float avg_accuracy = total_accuracy / test_batches;
+            std::cout << "Test Accuracy: " << avg_accuracy * 100.0f << "%\n" << std::endl;
+            
+            // reset train loader for next epoch
+            train_loader.reset();
         }
     }
 
@@ -1228,7 +1439,7 @@ class Predictor {
 
         // average the loss
         metrics.loss /= total;
-        
+
         // calculate accuracy
         metrics.accuracy /= total;
 
@@ -1239,12 +1450,12 @@ class Predictor {
         metrics.recall = true_positives / (true_positives + false_negatives + 1e-10f);
 
         // calculate f1 score
-        metrics.f1_score = 2.0f * (metrics.precision * metrics.recall) / 
-                          (metrics.precision + metrics.recall + 1e-10f);
+        metrics.f1_score = 2.0f * (metrics.precision * metrics.recall) / (metrics.precision + metrics.recall + 1e-10f);
 
         return metrics;
     }
 };
+
 
 // reads csv file for columns headed 'review' and 'sentiment', tokenises, then returns training examples.
 std::vector<TrainingExample> training_examples_from_csv(const std::string& filename, Tokeniser& tokeniser,
@@ -1336,34 +1547,25 @@ int main() {
     Tokeniser tokeniser("../data/glove.6B.100d.txt");
     std::vector<TrainingExample> all_examples = training_examples_from_csv("../data/imdb_clean.csv", tokeniser, 1000);
 
-    // split into training and test data
-    size_t size = all_examples.size();
-    const float split_ratio = 0.9f;
+    const size_t batch_size = 50;
+    const size_t epochs = 75;
 
-    std::vector<TrainingExample> training_data =
-        std::vector<TrainingExample>(all_examples.begin(), all_examples.begin() + static_cast<size_t>(size * split_ratio));
-    std::vector<TrainingExample> test_data =
-        std::vector<TrainingExample>(all_examples.begin() + static_cast<size_t>(size * split_ratio), all_examples.end());
+    // load training and test data
+    BatchDataLoader training_loader("../data/imdb_clean_train.csv", tokeniser, batch_size);
+    BatchDataLoader test_loader("../data/imdb_clean_test.csv", tokeniser, batch_size);
 
     auto input_features = 100;
-    size_t hidden_size = 64;
+    size_t hidden_size = 128;
     size_t output_size = 2;
-    std::vector<int> mlp_topology = {static_cast<int>(hidden_size), 32, static_cast<int>(output_size)};
-    std::vector<std::string> mlp_activation_functions = {"relu", "relu", "softmax"};
+    std::vector<int> mlp_topology = {static_cast<int>(hidden_size), 128, 32, static_cast<int>(output_size)};
+    std::vector<std::string> mlp_activation_functions = {"relu", "relu", "relu", "softmax"};
 
     Predictor predictor(input_features, hidden_size, output_size, mlp_topology);
     predictor.set_gru_optimiser(std::make_unique<GRUAdamWOptimiser>());
     predictor.set_mlp_optimiser(std::make_unique<MLPAdamWOptimiser>());
     predictor.set_loss(std::make_unique<CrossEntropyLoss>());
 
-    predictor.train(training_data, test_data, 75, 50);
-
-    // print some example predictions
-    std::cout << "\nSample predictions:" << std::endl;
-    for (size_t i = 0; i < std::min(size_t(10), test_data.size()); i++) {
-        Tensor3D prediction = predictor.predict(test_data[i].sequence);
-        std::cout << "Predicted: " << prediction(1, 0, 0) << " Actual: " << test_data[i].target(1, 0, 0) << std::endl;
-    }
+    predictor.train_with_batches(training_loader, test_loader, epochs);
 
     return 0;
 }
