@@ -73,6 +73,10 @@ public:
 
     // friend functions
     friend std::ostream& operator<<(std::ostream& os, const Tensor3D& tensor);
+
+    // file operations
+    void save_to_file(std::ofstream &file) const;
+    void load_from_file(std::ifstream &file);
 };
 
 #endif

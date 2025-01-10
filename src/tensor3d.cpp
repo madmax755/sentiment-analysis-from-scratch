@@ -1,5 +1,7 @@
 #include "../include/tensor3d.hpp"
 
+#include <fstream>
+
 Tensor3D::Tensor3D() : height(0), width(0), depth(0) {}
 
 // legacy constructor for 2D matrix compatibility 
@@ -422,4 +424,37 @@ std::ostream &operator<<(std::ostream &os, const Tensor3D &tensor) {
         if (d < tensor.depth - 1) os << "\n";
     }
     return os;
+}
+
+// helper functions for saving/loading Tensor3D
+void Tensor3D::save_to_file(std::ofstream &file) const {
+    // write dimensions
+    uint32_t depth_val = static_cast<uint32_t>(depth);
+    uint32_t height_val = static_cast<uint32_t>(height); 
+    uint32_t width_val = static_cast<uint32_t>(width);
+    
+    file.write(reinterpret_cast<const char *>(&depth_val), sizeof(depth_val));
+    file.write(reinterpret_cast<const char *>(&height_val), sizeof(height_val));
+    file.write(reinterpret_cast<const char *>(&width_val), sizeof(width_val));
+
+    // write flattened data
+    file.write(reinterpret_cast<const char *>(data.data()), data.size() * sizeof(float));
+}
+
+void Tensor3D::load_from_file(std::ifstream &file) {
+    // read dimensions
+    uint32_t depth_val, height_val, width_val;
+    file.read(reinterpret_cast<char *>(&depth_val), sizeof(depth_val));
+    file.read(reinterpret_cast<char *>(&height_val), sizeof(height_val));
+    file.read(reinterpret_cast<char *>(&width_val), sizeof(width_val));
+
+    depth = static_cast<size_t>(depth_val);
+    height = static_cast<size_t>(height_val);
+    width = static_cast<size_t>(width_val);
+
+    // resize data vector before reading
+    data.resize(depth * height * width);
+
+    // read flattened data
+    file.read(reinterpret_cast<char *>(data.data()), data.size() * sizeof(float));
 }

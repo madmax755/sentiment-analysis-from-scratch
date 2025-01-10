@@ -39,7 +39,6 @@ struct TrainingExample {
     }
 };
 
-// gradient storage struct for GRUCell -- defined globally to avoid circular dependency
 struct GRUGradients {
     Tensor3D dW_z, dU_z, db_z;  // update gate gradients
     Tensor3D dW_r, dU_r, db_r;  // reset gate gradients
@@ -246,6 +245,7 @@ class GRUCell {
 
     size_t input_size;
     size_t hidden_size;
+    
 
     GRUCell(size_t input_size, size_t hidden_size)
         : input_size(input_size),
@@ -374,7 +374,10 @@ class Layer {
      * @return The output matrix after applying the layer's transformation.
      */
     Tensor3D feedforward(const Tensor3D& input) {
+        // compute pre-activation
         Tensor3D z = weights * input + bias;
+
+        // apply activation function
         Tensor3D output(z.height, z.width);
         if (activation_function == "sigmoid") {
             output = z.apply(sigmoid);
@@ -382,6 +385,8 @@ class Layer {
             output = z.apply(relu);
         } else if (activation_function == "softmax") {
             output = z.softmax();
+        } else if (activation_function == "none") {
+            output = z;  // no activation
         } else {
             throw std::runtime_error("no activation function found for layer");
         }
@@ -395,7 +400,10 @@ class Layer {
      * @return A vector containing the output matrix and pre-activation matrix.
      */
     std::vector<Tensor3D> feedforward_backprop(const Tensor3D& input) const {
+        // compute pre-activation
         Tensor3D z = weights * input + bias;
+
+        // apply activation function
         Tensor3D output(z.height, z.width);
         if (activation_function == "sigmoid") {
             output = z.apply(sigmoid);
@@ -403,6 +411,8 @@ class Layer {
             output = z.apply(relu);
         } else if (activation_function == "softmax") {
             output = z.softmax();
+        } else if (activation_function == "none") {
+            output = z;  // no activation
         } else {
             throw std::runtime_error("no activation function found for layer");
         }
@@ -1194,6 +1204,11 @@ class Predictor {
 
     // process sequence and return prediction (full feedforward pass)
     Tensor3D predict(const std::vector<Tensor3D>& input_sequence) {
+        if (input_sequence.empty()) {
+            throw std::runtime_error("can't predict on empty input sequence");
+        }
+
+        // initialise hidden state
         Tensor3D h_t(hidden_size, 1);
 
         // process sequence through GRU
@@ -1335,6 +1350,8 @@ class Predictor {
             }
 
             std::cout << "\rEpoch " << epoch + 1 << "/" << epochs << " complete    " << std::endl;
+            std::string model_path = "model_" + std::to_string(epoch) + ".bin";
+            save_model(model_path);
             
             // evaluate on test set
             float total_accuracy = 0.0f;
@@ -1421,6 +1438,98 @@ class Predictor {
         metrics.f1_score = 2.0f * (metrics.precision * metrics.recall) / (metrics.precision + metrics.recall + 1e-10f);
 
         return metrics;
+    }
+
+    void save_model(const std::string& filepath) const {
+        std::ofstream file(filepath, std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("could not open file for saving: " + filepath);
+        }
+
+        // save model architecture parameters
+        file.write(reinterpret_cast<const char*>(&input_size), sizeof(input_size));
+        file.write(reinterpret_cast<const char*>(&hidden_size), sizeof(hidden_size));
+        file.write(reinterpret_cast<const char*>(&output_size), sizeof(output_size));
+
+        // save GRU parameters
+        gru.W_z.save_to_file(file);
+        gru.U_z.save_to_file(file);
+        gru.b_z.save_to_file(file);
+        gru.W_r.save_to_file(file);
+        gru.U_r.save_to_file(file);
+        gru.b_r.save_to_file(file);
+        gru.W_h.save_to_file(file);
+        gru.U_h.save_to_file(file);
+        gru.b_h.save_to_file(file);
+
+        // save number of MLP layers
+        size_t num_layers = mlp.layers.size();
+        file.write(reinterpret_cast<const char*>(&num_layers), sizeof(num_layers));
+
+        // save MLP parameters
+        for (const auto& layer : mlp.layers) {
+            // save layer dimensions and parameters
+            layer.weights.save_to_file(file);
+            layer.bias.save_to_file(file);
+            
+            // save activation function name
+            size_t name_length = layer.activation_function.length();
+            file.write(reinterpret_cast<const char*>(&name_length), sizeof(name_length));
+            file.write(layer.activation_function.c_str(), name_length);
+        }
+    }
+
+    static Predictor load_model(const std::string& filepath) {
+        std::ifstream file(filepath, std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("could not open file for loading: " + filepath);
+        }
+
+        // load model architecture parameters
+        size_t input_size, hidden_size, output_size;
+        file.read(reinterpret_cast<char*>(&input_size), sizeof(input_size));
+        file.read(reinterpret_cast<char*>(&hidden_size), sizeof(hidden_size));
+        file.read(reinterpret_cast<char*>(&output_size), sizeof(output_size));
+
+        // create predictor with loaded dimensions
+        std::vector<int> mlp_topology = {static_cast<int>(hidden_size)};  // will be populated fully later
+        Predictor predictor(input_size, hidden_size, output_size, mlp_topology);
+
+        // load GRU parameters
+        predictor.gru.W_z.load_from_file(file);
+        predictor.gru.U_z.load_from_file(file);
+        predictor.gru.b_z.load_from_file(file);
+        predictor.gru.W_r.load_from_file(file);
+        predictor.gru.U_r.load_from_file(file);
+        predictor.gru.b_r.load_from_file(file);
+        predictor.gru.W_h.load_from_file(file);
+        predictor.gru.U_h.load_from_file(file);
+        predictor.gru.b_h.load_from_file(file);
+
+        // load number of MLP layers
+        size_t num_layers;
+        file.read(reinterpret_cast<char*>(&num_layers), sizeof(num_layers));
+
+        // clear existing layers and load new ones
+        predictor.mlp.layers.clear();
+
+        // load MLP parameters
+        for (size_t i = 0; i < num_layers; ++i) {
+            Layer layer(1, 1);  // temporary dimensions, will be overwritten
+            layer.weights.load_from_file(file);
+            layer.bias.load_from_file(file);
+            
+            // load activation function name
+            size_t name_length;
+            file.read(reinterpret_cast<char*>(&name_length), sizeof(name_length));
+            std::vector<char> name_buffer(name_length);
+            file.read(name_buffer.data(), name_length);
+            layer.activation_function = std::string(name_buffer.data(), name_length);
+            
+            predictor.mlp.layers.push_back(layer);
+        }
+
+        return predictor;
     }
 };
 
@@ -1509,12 +1618,16 @@ std::vector<TrainingExample> training_examples_from_csv(const std::string& filen
     return examples;
 }
 
+
+// todo:
+// - add gradient clipping
+
+
 int main() {
 
     // load embeddings and training data
     // paths are relative to compiled executable location
     Tokeniser tokeniser("../data/glove.6B.100d.txt");
-    std::vector<TrainingExample> all_examples = training_examples_from_csv("../data/imdb_clean.csv", tokeniser, 1000);
 
     const size_t batch_size = 100;
     const size_t epochs = 75;

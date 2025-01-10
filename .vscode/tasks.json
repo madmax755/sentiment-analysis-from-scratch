@@ -2,20 +2,18 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build & Run",
+            "label": "build",
             "type": "shell",
-            "command": "make run",
+            "command": "make build",
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
             "presentation": {
-                "reveal": "always",
-                "panel": "new"
+                "reveal": "silent",
+                "clear": true
             },
-            "problemMatcher": [
-                "$gcc"
-            ]
+            "problemMatcher": ["$gcc"]
         }
     ]
 }
