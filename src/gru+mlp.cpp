@@ -8,6 +8,9 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <thread>
+#include <unordered_map>
+#include <mutex>
 
 #include "../include/loss.hpp"
 #include "../include/tensor3d.hpp"
@@ -213,10 +216,21 @@ class GRUCell {
               h_prev(hidden_size, 1),
               x(input_size, 1) {}
     };
-    std::vector<TimeStep> time_steps;
+    
+    std::unordered_map<std::thread::id, std::vector<TimeStep>> time_steps;
+    std::unique_ptr<std::mutex> timesteps_mutex;
 
     // clear the stored states
-    void clear_states() { time_steps.clear(); }
+    void clear_states() {
+        std::lock_guard<std::mutex> lock(*timesteps_mutex);
+        time_steps[std::this_thread::get_id()].clear();
+    }
+
+    // get the timesteps for the current thread
+    std::vector<TimeStep>& get_thread_timesteps() {
+        std::lock_guard<std::mutex> lock(*timesteps_mutex);
+        return time_steps[std::this_thread::get_id()];
+    }
 
     // store the gstdradients and the gradient of the hidden state from the previous timestep
     struct BackwardResult {
@@ -226,14 +240,16 @@ class GRUCell {
         BackwardResult(GRUGradients g, Tensor3D h) : grads(g), dh_prev(h) {}
     };
 
+
+
     // compute gradients for a single timestep
     BackwardResult backward(const Tensor3D& delta_h_t, size_t t) {
-        if (t >= time_steps.size()) {
+        if (t >= get_thread_timesteps().size()) {
             throw std::runtime_error("Time step index out of bounds");
         }
 
         // get the stored states for this timestep
-        const TimeStep& step = time_steps[t];
+        const TimeStep& step = get_thread_timesteps()[t];
 
         // initialise gradients for this timestep
         GRUGradients timestep_grads(input_size, hidden_size);
@@ -315,7 +331,8 @@ class GRUCell {
           b_r(hidden_size, 1),
           W_h(hidden_size, input_size),
           U_h(hidden_size, hidden_size),
-          b_h(hidden_size, 1) {
+          b_h(hidden_size, 1),
+          timesteps_mutex(std::make_unique<std::mutex>()) {
         // initialise weights using Xavier initialization
         W_z.xavier_initialise();
         U_z.xavier_initialise();
@@ -328,11 +345,11 @@ class GRUCell {
     }
 
     // get final hidden state
-    Tensor3D get_last_hidden_state() const {
-        if (time_steps.empty()) {
+    Tensor3D get_last_hidden_state() {
+        if (get_thread_timesteps().empty()) {
             throw std::runtime_error("No hidden state available - run forward pass first");
         }
-        return time_steps.back().h;
+        return get_thread_timesteps().back().h;
     }
 
     // resets gradients in GRUGradients struct to zero
@@ -366,7 +383,7 @@ class GRUCell {
         // final hidden state
         step.h = step.z.hadamard(h_prev) + (step.z.apply([](float x) { return 1.0f - x; }).hadamard(step.h_candidate));
 
-        time_steps.push_back(step);
+        get_thread_timesteps().push_back(step);
         return step.h;
     }
 
@@ -376,7 +393,7 @@ class GRUCell {
         reset_gradients(accumulated_grads);
 
         // backpropagate through time
-        for (int t = time_steps.size() - 1; t >= 0; --t) {
+        for (int t = get_thread_timesteps().size() - 1; t >= 0; --t) {
             BackwardResult result = backward(dh_next, t);
             dh_next = result.dh_prev;
 
@@ -1491,10 +1508,17 @@ class Predictor {
         }
     }
 
-    void train_with_batches(BatchDataLoader& train_loader, BatchDataLoader& test_loader, int epochs) {
+    void train_with_batches(BatchDataLoader& train_loader, BatchDataLoader& test_loader, int epochs, size_t no_threads = std::thread::hardware_concurrency()) {
         if (!gru_optimiser or !mlp_optimiser or !loss) {
             throw std::runtime_error("optimiser or loss function not set");
         }
+
+        // check if number of no_threads is valid
+        const int max_threads = std::thread::hardware_concurrency();
+        if (no_threads > max_threads) {
+            throw std::runtime_error("number of threads cannot be greater than the number of hardware threads");
+        }
+
         size_t full_batches = train_loader.no_examples / train_loader.batch_size;
 
         for (int epoch = 0; epoch < epochs; epoch++) {
@@ -1506,15 +1530,46 @@ class Predictor {
                 auto batch = train_loader.next_batch();
                 if (batch.empty()) break;  // end of epoch
 
-                // initialise gradients to accumulate (and eventually average gradients from batch)
+                // divide batch into mini-batches for parallel processing
+                size_t mini_batch_size = (batch.size() + no_threads - 1) / no_threads;
+                std::vector<GRUGradients> thread_gru_grads(no_threads, GRUGradients(input_size, hidden_size));
+                std::vector<MLPGradients> thread_mlp_grads(no_threads);
+                std::vector<std::thread> threads;
+
+                // launch threads
+                for (int t = 0; t < no_threads; t++) {
+                    threads.emplace_back([&, t]() {
+                        size_t start = t * mini_batch_size;
+                        size_t end = std::min(start + mini_batch_size, batch.size());
+
+                        // process mini-batch
+                        GRUGradients local_gru_grads(input_size, hidden_size);
+                        MLPGradients local_mlp_grads;
+
+                        for (size_t i = start; i < end; i++) {
+                            auto [gru_grads, mlp_grads] = compute_gradients(batch[i].sequence, batch[i].target);
+                            local_gru_grads = local_gru_grads + gru_grads;
+                            local_mlp_grads = local_mlp_grads + mlp_grads;
+                        }
+
+                        // store thread results
+                        thread_gru_grads[t] = local_gru_grads;
+                        thread_mlp_grads[t] = local_mlp_grads;
+                    });
+                }
+
+                // wait for all threads to complete
+                for (auto& thread : threads) {
+                    thread.join();
+                }
+
+                // combine gradients from all threads
                 GRUGradients averaged_gru_gradients(input_size, hidden_size);
                 MLPGradients averaged_mlp_gradients;
 
-                // iterate over batch and compute gradients
-                for (const auto& example : batch) {
-                    auto [gru_gradients, mlp_gradients] = compute_gradients(example.sequence, example.target);
-                    averaged_gru_gradients = averaged_gru_gradients + gru_gradients;
-                    averaged_mlp_gradients = averaged_mlp_gradients + mlp_gradients;
+                for (int t = 0; t < no_threads; t++) {
+                    averaged_gru_gradients = averaged_gru_gradients + thread_gru_grads[t];
+                    averaged_mlp_gradients = averaged_mlp_gradients + thread_mlp_grads[t];
                 }
 
                 // average gradients
