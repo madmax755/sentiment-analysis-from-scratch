@@ -77,6 +77,7 @@ public:
     // file operations
     void save_to_file(std::ofstream &file) const;
     void load_from_file(std::ifstream &file);
+    std::pair<float, float> get_magnitudes() const;
 };
 
 #endif

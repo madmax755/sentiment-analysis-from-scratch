@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
+#include "../include/loss.hpp"
 #include "../include/tensor3d.hpp"
 #include "../include/tokeniser.hpp"
-#include "../include/loss.hpp"
 
 // sigmoid activation function
 float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
@@ -91,6 +91,40 @@ struct GRUGradients {
         result.db_h = db_h * scalar;
         return result;
     }
+
+    float calculate_norm() const {
+        // use l2 norm across all gradients
+        float sum_squared = 0.0f;
+        size_t total_elements = 0;
+
+        // accumulate squared values from all gradient tensors
+        auto accumulate = [&](const Tensor3D& tensor) {
+            for (const auto& val : tensor.get_flat_data()) {
+                sum_squared += val * val;
+                total_elements++;
+            }
+        };
+
+        // process all gradient tensors
+        accumulate(dW_z); accumulate(dU_z); accumulate(db_z);
+        accumulate(dW_r); accumulate(dU_r); accumulate(db_r);
+        accumulate(dW_h); accumulate(dU_h); accumulate(db_h);
+
+        return std::sqrt(sum_squared / total_elements);
+    }
+
+    // scale all gradients by a factor
+    void scale(float factor) {
+        dW_z = dW_z * factor;
+        dU_z = dU_z * factor;
+        db_z = db_z * factor;
+        dW_r = dW_r * factor;
+        dU_r = dU_r * factor;
+        db_r = db_r * factor;
+        dW_h = dW_h * factor;
+        dU_h = dU_h * factor;
+        db_h = db_h * factor;
+    }
 };
 
 struct MLPGradients {
@@ -136,6 +170,30 @@ struct MLPGradients {
             result.gradients.push_back(layer_grads);
         }
         return result;
+    }
+
+    float calculate_norm() const {
+        float sum_squared = 0.0f;
+        size_t total_elements = 0;
+
+        for (const auto& layer : gradients) {
+            for (const auto& tensor : layer) {
+                for (const auto& val : tensor.get_flat_data()) {
+                    sum_squared += val * val;
+                    total_elements++;
+                }
+            }
+        }
+
+        return std::sqrt(sum_squared / total_elements);
+    }
+
+    void scale(float factor) {
+        for (auto& layer : gradients) {
+            for (auto& tensor : layer) {
+                tensor = tensor * factor;
+            }
+        }
     }
 };
 
@@ -245,7 +303,6 @@ class GRUCell {
 
     size_t input_size;
     size_t hidden_size;
-    
 
     GRUCell(size_t input_size, size_t hidden_size)
         : input_size(input_size),
@@ -439,7 +496,7 @@ class MLPOptimiser {
     virtual ~MLPOptimiser() = default;
 
     struct GradientResult {
-        MLPGradients gradients;          // list of layers, each layer has a list of weight and bias gradient matrices
+        MLPGradients gradients;         // list of layers, each layer has a list of weight and bias gradient matrices
         Tensor3D input_layer_gradient;  // gradient of the input layer - for more general use as parts of bigger architectures
         Tensor3D output;                // output of the network
     };
@@ -512,19 +569,30 @@ class MLPOptimiser {
         // return a GradientResult struct for purposes of tracking loss
         return {gradients, input_delta, activations.back()};
     }
+
+    // return clipped gradients to prevent exploding gradients
+    MLPGradients clip_gradients(const MLPGradients& gradients, float max_norm = 1.0f) {
+        MLPGradients scaled_gradients = gradients;
+        float norm = scaled_gradients.calculate_norm();
+        if (norm > max_norm) {
+            scaled_gradients.scale(max_norm / norm);
+        }
+        return scaled_gradients;
+    }
 };
 
 class MLPSGDOptimiser : public MLPOptimiser {
    private:
     float learning_rate;
     std::vector<std::vector<Tensor3D>> velocity;
+    float clip_norm;
 
    public:
     /**
      * @brief Constructs an MLPSGDOptimiser object with the specified learning rate.
      * @param lr The learning rate (default: 0.1f).
      */
-    MLPSGDOptimiser(float lr = 0.1f) : learning_rate(lr) {}
+    MLPSGDOptimiser(float lr = 0.1f, float clip_norm = 1.0f) : learning_rate(lr), clip_norm(clip_norm) {}
 
     /**
      * @brief Initializes the velocity vectors for SGD optimization.
@@ -548,11 +616,18 @@ class MLPSGDOptimiser : public MLPOptimiser {
             initialise_velocity(layers);
         }
 
+        // convert vector of vectors to MLPGradients
+        MLPGradients gradients_copy;
+        gradients_copy.gradients = gradients;
+
+        // clip gradients
+        MLPGradients clipped_gradients = clip_gradients(gradients_copy, clip_norm);
+
         // compute and apply updates
         for (size_t l = 0; l < layers.size(); ++l) {
             for (int i = 0; i < 2; ++i) {  // 0 for weights, 1 for biases
                 // compute adjustment
-                velocity[l][i] = gradients[l][i] * -learning_rate;
+                velocity[l][i] = clipped_gradients.gradients[l][i] * -learning_rate;
             }
             // apply adjustment
             layers[l].weights = layers[l].weights + velocity[l][0];
@@ -566,6 +641,7 @@ class MLPSGDMomentumOptimiser : public MLPOptimiser {
     float learning_rate;
     float momentum;
     std::vector<std::vector<Tensor3D>> velocity;
+    float clip_norm;
 
    public:
     /**
@@ -573,7 +649,7 @@ class MLPSGDMomentumOptimiser : public MLPOptimiser {
      * @param lr The learning rate (default: 0.1f).
      * @param mom The momentum coeficient (default: 0.9f).
      */
-    MLPSGDMomentumOptimiser(float lr = 0.1f, float mom = 0.9f) : learning_rate(lr), momentum(mom) {}
+    MLPSGDMomentumOptimiser(float lr = 0.1f, float mom = 0.9f, float clip_norm = 1.0f) : learning_rate(lr), momentum(mom), clip_norm(clip_norm) {}
 
     /**
      * @brief Initializes the velocity vectors for SGD with Momentum optimization.
@@ -598,11 +674,18 @@ class MLPSGDMomentumOptimiser : public MLPOptimiser {
             initialise_velocity(layers);
         }
 
+        // convert vector of vectors to MLPGradients
+        MLPGradients gradients_copy;
+        gradients_copy.gradients = gradients;
+
+        // clip gradients
+        MLPGradients clipped_gradients = clip_gradients(gradients_copy, clip_norm);
+
         // compute updates
         for (size_t l = 0; l < layers.size(); ++l) {
             for (int i = 0; i < 2; ++i) {  // 0 for weights, 1 for biases
                 // compute adjustments
-                velocity[l][i] = (velocity[l][i] * momentum) - (gradients[l][i] * learning_rate);
+                velocity[l][i] = (velocity[l][i] * momentum) - (clipped_gradients.gradients[l][i] * learning_rate);
             }
             // apply adjustments
             layers[l].weights = layers[l].weights + velocity[l][0];
@@ -620,7 +703,7 @@ class MLPAdamOptimiser : public MLPOptimiser {
     int t;                                 // timestep
     std::vector<std::vector<Tensor3D>> m;  // first moment
     std::vector<std::vector<Tensor3D>> v;  // second moment
-
+    float clip_norm;
    public:
     /**
      * @brief Constructs an MLPAdamOptimiser object with the specified parameters.
@@ -629,8 +712,8 @@ class MLPAdamOptimiser : public MLPOptimiser {
      * @param b2 The beta2 parameter (default: 0.9f99).
      * @param eps The epsilon parameter for numerical stability (default: 1e-8).
      */
-    MLPAdamOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0) {}
+    MLPAdamOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float clip_norm = 1.0f)
+        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0), clip_norm(clip_norm) {}
 
     /**
      * @brief Initializes the first and second moment vectors for Adam optimization.
@@ -657,15 +740,22 @@ class MLPAdamOptimiser : public MLPOptimiser {
             initialise_moments(layers);
         }
 
+        // convert vector of vectors to MLPGradients
+        MLPGradients gradients_copy;
+        gradients_copy.gradients = gradients;
+
+        // clip gradients
+        MLPGradients clipped_gradients = clip_gradients(gradients_copy, clip_norm);
+
         t++;  // increment timestep
 
         for (size_t l = 0; l < layers.size(); ++l) {
             for (int i = 0; i < 2; ++i) {  // 0 for weights, 1 for biases
                 // update biased first moment estimate
-                m[l][i] = m[l][i] * beta1 + gradients[l][i] * (1.0f - beta1);
+                m[l][i] = m[l][i] * beta1 + clipped_gradients.gradients[l][i] * (1.0f - beta1);
 
                 // update biased second raw moment estimate
-                v[l][i] = v[l][i] * beta2 + gradients[l][i].hadamard(gradients[l][i]) * (1.0f - beta2);
+                v[l][i] = v[l][i] * beta2 + clipped_gradients.gradients[l][i].hadamard(clipped_gradients.gradients[l][i]) * (1.0f - beta2);
 
                 // compute bias-corrected first moment estimate
                 Tensor3D m_hat = m[l][i] * (1.0f / (1.0f - std::pow(beta1, t)));
@@ -697,6 +787,7 @@ class MLPAdamWOptimiser : public MLPOptimiser {
     int t;                                 // timestep
     std::vector<std::vector<Tensor3D>> m;  // first moment
     std::vector<std::vector<Tensor3D>> v;  // second moment
+    float clip_norm;
 
    public:
     /**
@@ -707,8 +798,8 @@ class MLPAdamWOptimiser : public MLPOptimiser {
      * @param eps The epsilon parameter for numerical stability (default: 1e-8).
      * @param wd The weight decay parameter (default: 0.0f1).
      */
-    MLPAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float wd = 0.001f)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0) {}
+    MLPAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float wd = 0.001f, float clip_norm = 1.0f)
+        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), clip_norm(clip_norm) {}
 
     /**
      * @brief Initializes the first and second moment vectors for AdamW optimization.
@@ -735,15 +826,22 @@ class MLPAdamWOptimiser : public MLPOptimiser {
             initialise_moments(layers);
         }
 
+        // convert vector of vectors to MLPGradients
+        MLPGradients gradients_copy;
+        gradients_copy.gradients = gradients;
+
+        // clip gradients
+        MLPGradients clipped_gradients = clip_gradients(gradients_copy, clip_norm);
+
         t++;  // increment timestep
 
         for (size_t l = 0; l < layers.size(); ++l) {
             for (int i = 0; i < 2; ++i) {  // 0 for weights, 1 for biases
                 // update biased first moment estimate
-                m[l][i] = m[l][i] * beta1 + gradients[l][i] * (1.0f - beta1);
+                m[l][i] = m[l][i] * beta1 + clipped_gradients.gradients[l][i] * (1.0f - beta1);
 
                 // update biased second raw moment estimate
-                v[l][i] = v[l][i] * beta2 + gradients[l][i].hadamard(gradients[l][i]) * (1.0f - beta2);
+                v[l][i] = v[l][i] * beta2 + clipped_gradients.gradients[l][i].hadamard(clipped_gradients.gradients[l][i]) * (1.0f - beta2);
 
                 // compute bias-corrected first moment estimate
                 Tensor3D m_hat = m[l][i] * (1.0f / (1.0f - std::pow(beta1, t)));
@@ -771,30 +869,45 @@ class MLPAdamWOptimiser : public MLPOptimiser {
 
 class GRUOptimiser {
    public:
+
     virtual void compute_and_apply_updates(GRUCell& gru, const GRUGradients& gradients) = 0;
     virtual ~GRUOptimiser() = default;
+
+    // return clipped gradients to prevent exploding gradients
+    GRUGradients clip_gradients(const GRUGradients& gradients, float max_norm = 1.0f) {
+        GRUGradients scaled_gradients = gradients;
+        float norm = scaled_gradients.calculate_norm();
+        if (norm > max_norm) {
+            scaled_gradients.scale(max_norm / norm);
+        }
+        return scaled_gradients;
+    }
 };
 
 class GRUSGDOptimiser : public GRUOptimiser {
    private:
     float learning_rate;
-
+    float clip_norm;
    public:
-    GRUSGDOptimiser(float lr = 0.1f) : learning_rate(lr) {}
+    GRUSGDOptimiser(float lr = 0.1f, float clip_norm = 1.0f) : learning_rate(lr), clip_norm(clip_norm) {}
 
     void compute_and_apply_updates(GRUCell& gru, const GRUGradients& grads) override {
+
+        // clip grads
+        GRUGradients clipped_gradients = clip_gradients(grads, clip_norm);
+
         // update weights and biases using gradients
-        gru.W_z = gru.W_z - grads.dW_z * learning_rate;
-        gru.U_z = gru.U_z - grads.dU_z * learning_rate;
-        gru.b_z = gru.b_z - grads.db_z * learning_rate;
+        gru.W_z = gru.W_z - clipped_gradients.dW_z * learning_rate;
+        gru.U_z = gru.U_z - clipped_gradients.dU_z * learning_rate;
+        gru.b_z = gru.b_z - clipped_gradients.db_z * learning_rate;
 
-        gru.W_r = gru.W_r - grads.dW_r * learning_rate;
-        gru.U_r = gru.U_r - grads.dU_r * learning_rate;
-        gru.b_r = gru.b_r - grads.db_r * learning_rate;
+        gru.W_r = gru.W_r - clipped_gradients.dW_r * learning_rate;
+        gru.U_r = gru.U_r - clipped_gradients.dU_r * learning_rate;
+        gru.b_r = gru.b_r - clipped_gradients.db_r * learning_rate;
 
-        gru.W_h = gru.W_h - grads.dW_h * learning_rate;
-        gru.U_h = gru.U_h - grads.dU_h * learning_rate;
-        gru.b_h = gru.b_h - grads.db_h * learning_rate;
+        gru.W_h = gru.W_h - clipped_gradients.dW_h * learning_rate;
+        gru.U_h = gru.U_h - clipped_gradients.dU_h * learning_rate;
+        gru.b_h = gru.b_h - clipped_gradients.db_h * learning_rate;
     }
 };
 
@@ -803,10 +916,10 @@ class GRUSGDMomentumOptimiser : public GRUOptimiser {
     float learning_rate;
     float momentum;
     GRUGradients velocity;
-
+    float clip_norm;
    public:
-    GRUSGDMomentumOptimiser(float lr = 0.1f, float mom = 0.9f)
-        : learning_rate(lr), momentum(mom), velocity(0, 0) {}  // sizes will be set on first use
+    GRUSGDMomentumOptimiser(float lr = 0.1f, float mom = 0.9f, float clip_norm = 1.0f)
+        : learning_rate(lr), momentum(mom), velocity(0, 0), clip_norm(clip_norm) {}  // sizes will be set on first use
 
     void compute_and_apply_updates(GRUCell& gru, const GRUGradients& grads) override {
         // initialise velocity if needed
@@ -814,18 +927,21 @@ class GRUSGDMomentumOptimiser : public GRUOptimiser {
             velocity = GRUGradients(gru.input_size, gru.hidden_size);
         }
 
+        // clip grads
+        GRUGradients clipped_gradients = clip_gradients(grads, clip_norm);
+
         // update velocities and apply updates for each parameter
-        velocity.dW_z = velocity.dW_z * momentum - grads.dW_z * learning_rate;
-        velocity.dU_z = velocity.dU_z * momentum - grads.dU_z * learning_rate;
-        velocity.db_z = velocity.db_z * momentum - grads.db_z * learning_rate;
+        velocity.dW_z = velocity.dW_z * momentum - clipped_gradients.dW_z * learning_rate;
+        velocity.dU_z = velocity.dU_z * momentum - clipped_gradients.dU_z * learning_rate;
+        velocity.db_z = velocity.db_z * momentum - clipped_gradients.db_z * learning_rate;
 
-        velocity.dW_r = velocity.dW_r * momentum - grads.dW_r * learning_rate;
-        velocity.dU_r = velocity.dU_r * momentum - grads.dU_r * learning_rate;
-        velocity.db_r = velocity.db_r * momentum - grads.db_r * learning_rate;
+        velocity.dW_r = velocity.dW_r * momentum - clipped_gradients.dW_r * learning_rate;
+        velocity.dU_r = velocity.dU_r * momentum - clipped_gradients.dU_r * learning_rate;
+        velocity.db_r = velocity.db_r * momentum - clipped_gradients.db_r * learning_rate;
 
-        velocity.dW_h = velocity.dW_h * momentum - grads.dW_h * learning_rate;
-        velocity.dU_h = velocity.dU_h * momentum - grads.dU_h * learning_rate;
-        velocity.db_h = velocity.db_h * momentum - grads.db_h * learning_rate;
+        velocity.dW_h = velocity.dW_h * momentum - clipped_gradients.dW_h * learning_rate;
+        velocity.dU_h = velocity.dU_h * momentum - clipped_gradients.dU_h * learning_rate;
+        velocity.db_h = velocity.db_h * momentum - clipped_gradients.db_h * learning_rate;
 
         // apply updates
         gru.W_z = gru.W_z + velocity.dW_z;
@@ -851,6 +967,7 @@ class GRUAdamOptimiser : public GRUOptimiser {
     int t;
     GRUGradients m;
     GRUGradients v;
+    float clip_norm;
 
     void update_parameter(Tensor3D& param, Tensor3D& m_param, Tensor3D& v_param, const Tensor3D& grad) {
         // Update biased first moment estimate
@@ -872,8 +989,8 @@ class GRUAdamOptimiser : public GRUOptimiser {
     }
 
    public:
-    GRUAdamOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0), m(0, 0), v(0, 0) {}
+    GRUAdamOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float clip_norm = 1.0f)
+        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0), m(0, 0), v(0, 0), clip_norm(clip_norm) {}
 
     void compute_and_apply_updates(GRUCell& gru, const GRUGradients& grads) override {
         if (m.dW_z.height == 0) {
@@ -881,18 +998,21 @@ class GRUAdamOptimiser : public GRUOptimiser {
             v = GRUGradients(gru.input_size, gru.hidden_size);
         }
 
+        // clip grads
+        GRUGradients clipped_gradients = clip_gradients(grads, clip_norm);
+
         t++;
 
         // Update all parameters
-        update_parameter(gru.W_z, m.dW_z, v.dW_z, grads.dW_z);
-        update_parameter(gru.U_z, m.dU_z, v.dU_z, grads.dU_z);
-        update_parameter(gru.b_z, m.db_z, v.db_z, grads.db_z);
-        update_parameter(gru.W_r, m.dW_r, v.dW_r, grads.dW_r);
-        update_parameter(gru.U_r, m.dU_r, v.dU_r, grads.dU_r);
-        update_parameter(gru.b_r, m.db_r, v.db_r, grads.db_r);
-        update_parameter(gru.W_h, m.dW_h, v.dW_h, grads.dW_h);
-        update_parameter(gru.U_h, m.dU_h, v.dU_h, grads.dU_h);
-        update_parameter(gru.b_h, m.db_h, v.db_h, grads.db_h);
+        update_parameter(gru.W_z, m.dW_z, v.dW_z, clipped_gradients.dW_z);
+        update_parameter(gru.U_z, m.dU_z, v.dU_z, clipped_gradients.dU_z);
+        update_parameter(gru.b_z, m.db_z, v.db_z, clipped_gradients.db_z);
+        update_parameter(gru.W_r, m.dW_r, v.dW_r, clipped_gradients.dW_r);
+        update_parameter(gru.U_r, m.dU_r, v.dU_r, clipped_gradients.dU_r);
+        update_parameter(gru.b_r, m.db_r, v.db_r, clipped_gradients.db_r);
+        update_parameter(gru.W_h, m.dW_h, v.dW_h, clipped_gradients.dW_h);
+        update_parameter(gru.U_h, m.dU_h, v.dU_h, clipped_gradients.dU_h);
+        update_parameter(gru.b_h, m.db_h, v.db_h, clipped_gradients.db_h);
     }
 };
 
@@ -906,6 +1026,7 @@ class GRUAdamWOptimiser : public GRUOptimiser {
     int t;
     GRUGradients m;
     GRUGradients v;
+    float clip_norm;
 
     void update_parameter(Tensor3D& param, Tensor3D& m_param, Tensor3D& v_param, const Tensor3D& grad,
                           bool apply_weight_decay = true) {
@@ -933,8 +1054,8 @@ class GRUAdamWOptimiser : public GRUOptimiser {
     }
 
    public:
-    GRUAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float wd = 0.001f)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), m(0, 0), v(0, 0) {}
+    GRUAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float wd = 0.001f, float clip_norm = 1.0f)
+        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), m(0, 0), v(0, 0), clip_norm(clip_norm) {}
 
     void compute_and_apply_updates(GRUCell& gru, const GRUGradients& grads) override {
         if (m.dW_z.height == 0) {
@@ -942,20 +1063,23 @@ class GRUAdamWOptimiser : public GRUOptimiser {
             v = GRUGradients(gru.input_size, gru.hidden_size);
         }
 
+        // clip grads
+        GRUGradients clipped_gradients = clip_gradients(grads, clip_norm);
+
         t++;
 
         // Update weights (with weight decay)
-        update_parameter(gru.W_z, m.dW_z, v.dW_z, grads.dW_z, true);
-        update_parameter(gru.U_z, m.dU_z, v.dU_z, grads.dU_z, true);
-        update_parameter(gru.W_r, m.dW_r, v.dW_r, grads.dW_r, true);
-        update_parameter(gru.U_r, m.dU_r, v.dU_r, grads.dU_r, true);
-        update_parameter(gru.W_h, m.dW_h, v.dW_h, grads.dW_h, true);
-        update_parameter(gru.U_h, m.dU_h, v.dU_h, grads.dU_h, true);
+        update_parameter(gru.W_z, m.dW_z, v.dW_z, clipped_gradients.dW_z, true);
+        update_parameter(gru.U_z, m.dU_z, v.dU_z, clipped_gradients.dU_z, true);
+        update_parameter(gru.W_r, m.dW_r, v.dW_r, clipped_gradients.dW_r, true);
+        update_parameter(gru.U_r, m.dU_r, v.dU_r, clipped_gradients.dU_r, true);
+        update_parameter(gru.W_h, m.dW_h, v.dW_h, clipped_gradients.dW_h, true);
+        update_parameter(gru.U_h, m.dU_h, v.dU_h, clipped_gradients.dU_h, true);
 
         // Update biases (without weight decay)
-        update_parameter(gru.b_z, m.db_z, v.db_z, grads.db_z, false);
-        update_parameter(gru.b_r, m.db_r, v.db_r, grads.db_r, false);
-        update_parameter(gru.b_h, m.db_h, v.db_h, grads.db_h, false);
+        update_parameter(gru.b_z, m.db_z, v.db_z, clipped_gradients.db_z, false);
+        update_parameter(gru.b_r, m.db_r, v.db_r, clipped_gradients.db_r, false);
+        update_parameter(gru.b_h, m.db_h, v.db_h, clipped_gradients.db_h, false);
     }
 };
 
@@ -966,6 +1090,7 @@ class BatchDataLoader {
    public:
     size_t batch_size;
     size_t no_examples;
+
    private:
     std::string filename;
     Tokeniser& tokeniser;
@@ -973,20 +1098,20 @@ class BatchDataLoader {
     std::string header;
     int review_idx;
     int sentiment_idx;
-    
+
     // store the byte offset of each line in the file
     std::vector<std::streampos> line_positions;
     std::vector<size_t> indices;
     size_t current_index;
-    
+
     // initialise line positions - only done once when loader is created
     void init_line_positions() {
         std::string line;
-        
+
         // store header position
         std::streampos header_pos = file.tellg();
         std::getline(file, line);
-        
+
         // store all other line positions
         while (file.good()) {
             std::streampos pos = file.tellg();
@@ -995,7 +1120,7 @@ class BatchDataLoader {
                 line_positions.push_back(pos);
             }
         }
-        
+
         // prepare indices for shuffling
         indices.resize(line_positions.size());
         std::iota(indices.begin(), indices.end(), 0);
@@ -1003,11 +1128,9 @@ class BatchDataLoader {
         no_examples = indices.size();
     }
 
-public:
-    BatchDataLoader(const std::string& filename, Tokeniser& tokeniser, size_t batch_size) 
-        : filename(filename), tokeniser(tokeniser), batch_size(batch_size), 
-          file(filename), current_index(0) {
-        
+   public:
+    BatchDataLoader(const std::string& filename, Tokeniser& tokeniser, size_t batch_size)
+        : filename(filename), tokeniser(tokeniser), batch_size(batch_size), file(filename), current_index(0) {
         if (!file.is_open()) {
             throw std::runtime_error("could not open file: " + filename);
         }
@@ -1039,28 +1162,27 @@ public:
 
     // load next batch of examples
     std::vector<TrainingExample> next_batch(int no_examples = -1) {
-
-        // by default, load a full batch 
+        // by default, load a full batch
         if (no_examples == -1) {
             no_examples = batch_size;
         }
 
         std::vector<TrainingExample> batch;
-        
+
         if (current_index >= indices.size()) {
-            return batch; // return empty batch if we've processed all data - use to trigger end of epoch
+            return batch;  // return empty batch if we've processed all data - use to trigger end of epoch
         }
-        
+
         size_t examples_to_process = std::min(batch_size, indices.size() - current_index);
-        
+
         for (size_t i = 0; i < examples_to_process; ++i) {
             // jump directly to the line we want using stored position
             file.clear();  // clear any error flags
             file.seekg(line_positions[indices[current_index + i]]);
-            
+
             std::string line;
             std::getline(file, line);
-            
+
             std::stringstream row_stream(line);
             std::string cell;
             std::string review;
@@ -1092,7 +1214,7 @@ public:
                 batch.push_back({sequence, target});
             }
         }
-        
+
         current_index += examples_to_process;
         return batch;
     }
@@ -1114,6 +1236,7 @@ class MLP {
      * @param topology A vector specifying the number of neurons in each layer.
      * @param activation_functions A vector specifying the activation function for each layer (optional).
      */
+
     MLP(const std::vector<int>& topology, const std::vector<std::string> activation_functions = {}) {
         if (topology.empty()) {
             throw std::invalid_argument("Topology cannot be empty");
@@ -1234,8 +1357,7 @@ class Predictor {
     }
 
     // gets the gradients for a single training example
-    std::pair<GRUGradients, MLPGradients> compute_gradients(const std::vector<Tensor3D>& input_sequence,
-                                                                                  const Tensor3D& target) {
+    std::pair<GRUGradients, MLPGradients> compute_gradients(const std::vector<Tensor3D>& input_sequence, const Tensor3D& target) {
         // forward pass
         Tensor3D final_hidden_state = feedforward_gru(input_sequence);
 
@@ -1245,6 +1367,75 @@ class Predictor {
         // backpropagate through GRU
         auto gru_gradients = gru.backpropagate(input_layer_gradient);
         return {gru_gradients, mlp_gradients};
+    }
+
+    struct GradientMagnitudes {
+        // gru magnitudes
+        float gru_weights_max;
+        float gru_weights_avg;
+        // mlp magnitudes
+        float mlp_weights_max;
+        float mlp_weights_avg;
+
+        friend std::ostream& operator<<(std::ostream& os, const GradientMagnitudes& m) {
+            os << "GRU - max: " << m.gru_weights_max << ", avg: " << m.gru_weights_avg << "\n";
+            os << "MLP - max: " << m.mlp_weights_max << ", avg: " << m.mlp_weights_avg;
+            return os;
+        }
+    };
+
+    struct WeightMagnitudes {
+        float gru_weights_max;
+        float gru_weights_avg;
+        float mlp_weights_max;
+        float mlp_weights_avg;
+
+        friend std::ostream& operator<<(std::ostream& os, const WeightMagnitudes& m) {
+            os << "GRU weights - max: " << m.gru_weights_max << ", avg: " << m.gru_weights_avg
+               << " | MLP weights - max: " << m.mlp_weights_max << ", avg: " << m.mlp_weights_avg;
+            return os;
+        }
+    };
+
+    WeightMagnitudes get_weight_magnitudes() const {
+        WeightMagnitudes magnitudes{0.0f, 0.0f, 0.0f, 0.0f};
+        float gru_sum = 0.0f;
+        int gru_count = 0;
+
+        // process gru weights
+        auto process_tensor = [&](const Tensor3D& t) {
+            auto [max_val, avg_val] = t.get_magnitudes();
+            magnitudes.gru_weights_max = std::max(magnitudes.gru_weights_max, max_val);
+            gru_sum += avg_val * t.get_flat_data().size();
+            gru_count += t.get_flat_data().size();
+        };
+
+        // check all gru weights
+        process_tensor(gru.W_z);
+        process_tensor(gru.U_z);
+        process_tensor(gru.b_z);
+        process_tensor(gru.W_r);
+        process_tensor(gru.U_r);
+        process_tensor(gru.b_r);
+        process_tensor(gru.W_h);
+        process_tensor(gru.U_h);
+        process_tensor(gru.b_h);
+
+        magnitudes.gru_weights_avg = gru_sum / gru_count;
+
+        // process mlp weights
+        float mlp_sum = 0.0f;
+        int mlp_count = 0;
+
+        for (const auto& layer : mlp.layers) {
+            auto [max_val, avg_val] = layer.weights.get_magnitudes();
+            magnitudes.mlp_weights_max = std::max(magnitudes.mlp_weights_max, max_val);
+            mlp_sum += avg_val * layer.weights.get_flat_data().size();
+            mlp_count += layer.weights.get_flat_data().size();
+        }
+
+        magnitudes.mlp_weights_avg = mlp_sum / mlp_count;
+        return magnitudes;
     }
 
     // regular train method - provide train set a test set and off it goes
@@ -1309,6 +1500,8 @@ class Predictor {
         for (int epoch = 0; epoch < epochs; epoch++) {
             int batch_count = 0;
 
+            std::cout << "Starting epoch " << epoch + 1 << "/" << epochs << std::endl;
+
             while (true) {
                 auto batch = train_loader.next_batch();
                 if (batch.empty()) break;  // end of epoch
@@ -1316,7 +1509,7 @@ class Predictor {
                 // initialise gradients to accumulate (and eventually average gradients from batch)
                 GRUGradients averaged_gru_gradients(input_size, hidden_size);
                 MLPGradients averaged_mlp_gradients;
-                
+
                 // iterate over batch and compute gradients
                 for (const auto& example : batch) {
                     auto [gru_gradients, mlp_gradients] = compute_gradients(example.sequence, example.target);
@@ -1339,37 +1532,41 @@ class Predictor {
                     float total_accuracy = 0.0f;
                     int test_batches = 0;
                     test_loader.reset();  // reset test loader to beginning
-                    
+
                     auto test_batch = test_loader.next_batch(200);
                     auto metrics = evaluate(test_batch);
-                    std::cout << " - Test Accuracy: " << metrics.accuracy * 100.0f << "%\n" << std::endl;
-                
+                    std::cout << " - rough test accuracy: " << metrics.accuracy * 100.0f << "%";
+
+                    // get weight magnitudes
+                    auto magnitudes = get_weight_magnitudes();
+                    std::cout << " - " << magnitudes << std::endl;
+
                 } else {
-                    std::cout << "\rBatch " << batch_count << "/" << full_batches << " complete" << std::flush;
+                    std::cout << "\rBatch " << batch_count << "/" << full_batches + 1 << " complete" << std::flush;
                 }
             }
 
             std::cout << "\rEpoch " << epoch + 1 << "/" << epochs << " complete    " << std::endl;
             std::string model_path = "model_" + std::to_string(epoch) + ".bin";
             save_model(model_path);
-            
+
             // evaluate on test set
             float total_accuracy = 0.0f;
             int test_batches = 0;
             test_loader.reset();  // reset test loader to beginning
-            
+
             while (true) {
                 auto test_batch = test_loader.next_batch();
                 if (test_batch.empty()) break;
-                
+
                 auto metrics = evaluate(test_batch);
                 total_accuracy += metrics.accuracy;
                 test_batches++;
             }
-            
+
             float avg_accuracy = total_accuracy / test_batches;
-            std::cout << " - Test Accuracy: " << avg_accuracy * 100.0f << "%\n" << std::endl;
-            
+            std::cout << " - full test accuracy: " << avg_accuracy * 100.0f << "%\n" << std::endl;
+
             // reset train loader for next epoch
             train_loader.reset();
         }
@@ -1471,7 +1668,7 @@ class Predictor {
             // save layer dimensions and parameters
             layer.weights.save_to_file(file);
             layer.bias.save_to_file(file);
-            
+
             // save activation function name
             size_t name_length = layer.activation_function.length();
             file.write(reinterpret_cast<const char*>(&name_length), sizeof(name_length));
@@ -1518,21 +1715,20 @@ class Predictor {
             Layer layer(1, 1);  // temporary dimensions, will be overwritten
             layer.weights.load_from_file(file);
             layer.bias.load_from_file(file);
-            
+
             // load activation function name
             size_t name_length;
             file.read(reinterpret_cast<char*>(&name_length), sizeof(name_length));
             std::vector<char> name_buffer(name_length);
             file.read(name_buffer.data(), name_length);
             layer.activation_function = std::string(name_buffer.data(), name_length);
-            
+
             predictor.mlp.layers.push_back(layer);
         }
 
         return predictor;
     }
 };
-
 
 // reads csv file for columns headed 'review' and 'sentiment', tokenises, then returns training examples.
 std::vector<TrainingExample> training_examples_from_csv(const std::string& filename, Tokeniser& tokeniser,
@@ -1618,13 +1814,11 @@ std::vector<TrainingExample> training_examples_from_csv(const std::string& filen
     return examples;
 }
 
-
 // todo:
 // - add gradient clipping
 
 
 int main() {
-
     // load embeddings and training data
     // paths are relative to compiled executable location
     Tokeniser tokeniser("../data/glove.6B.100d.txt");

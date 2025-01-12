@@ -458,3 +458,18 @@ void Tensor3D::load_from_file(std::ifstream &file) {
     // read flattened data
     file.read(reinterpret_cast<char *>(data.data()), data.size() * sizeof(float));
 }
+
+
+std::pair<float, float> Tensor3D::get_magnitudes() const {
+    float max_val = 0.0f;
+    float sum = 0.0f;
+    int count = data.size();
+    
+    for (const float& val : data) {
+        float abs_val = std::abs(val);
+        max_val = std::max(max_val, abs_val);
+        sum += abs_val;
+    }
+    
+    return {max_val, sum / count};
+}
