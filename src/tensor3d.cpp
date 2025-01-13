@@ -1,6 +1,9 @@
 #include "../include/tensor3d.hpp"
 
 #include <fstream>
+#include <execinfo.h>  // for backtrace
+#include <cxxabi.h>    // for demangling C++ names
+
 
 Tensor3D::Tensor3D() : height(0), width(0), depth(0) {}
 
@@ -189,6 +192,7 @@ Tensor3D Tensor3D::operator*(const Tensor3D &other) const {
         }
     }
 
+    result.check_for_nans("multiplication");
     return result;
 }
 
@@ -205,6 +209,7 @@ Tensor3D Tensor3D::operator+(const Tensor3D &other) const {
             }
         }
     }
+    result.check_for_nans("addition");
     return result;
 }
 
@@ -217,6 +222,7 @@ Tensor3D Tensor3D::operator+(const float &other) const {
             }
         }
     }
+    result.check_for_nans("scalar addition");
     return result;
 }
 
@@ -233,6 +239,7 @@ Tensor3D Tensor3D::operator-(const Tensor3D &other) const {
             }
         }
     }
+    result.check_for_nans("subtraction");
     return result;
 }
 
@@ -245,6 +252,7 @@ Tensor3D Tensor3D::operator*(float scalar) const {
             }
         }
     }
+    result.check_for_nans("scalar multiplication");
     return result;
 }
 
@@ -261,6 +269,7 @@ Tensor3D Tensor3D::hadamard(const Tensor3D &other) const {
             }
         }
     }
+    result.check_for_nans("hadamard product");
     return result;
 }
 
@@ -273,6 +282,7 @@ Tensor3D Tensor3D::apply(float (*func)(float)) const {
             }
         }
     }
+    result.check_for_nans("apply function");
     return result;
 }
 
@@ -285,6 +295,7 @@ Tensor3D Tensor3D::transpose() const {
             }
         }
     }
+    result.check_for_nans("transpose");
     return result;
 }
 
@@ -311,6 +322,7 @@ Tensor3D Tensor3D::softmax() const {
             result(d, h, 0) /= sum;
         }
     }
+    result.check_for_nans("softmax");
     return result;
 }
 
@@ -329,6 +341,7 @@ Tensor3D Tensor3D::flatten() const {
         }
     }
 
+    result.check_for_nans("flatten");
     return result;
 }
 
@@ -353,6 +366,7 @@ Tensor3D Tensor3D::unflatten(size_t new_depth, size_t new_height, size_t new_wid
         }
     }
 
+    result.check_for_nans("unflatten");
     return result;
 }
 
@@ -381,6 +395,7 @@ Tensor3D Tensor3D::Conv(const Tensor3D &input, const Tensor3D &kernel) {
             output(0, y, x) = sum;
         }
     }
+    output.check_for_nans("convolution");
     return output;
 }
 
@@ -393,6 +408,7 @@ Tensor3D Tensor3D::rotate_180() const {
             }
         }
     }
+    result.check_for_nans("rotate_180");
     return result;
 }
 
@@ -472,4 +488,26 @@ std::pair<float, float> Tensor3D::get_magnitudes() const {
     }
     
     return {max_val, sum / count};
+}
+
+//debug 
+void Tensor3D::check_for_nans(const std::string& operation) const {
+    for (const auto& val : data) {
+        if (std::isnan(val)) {
+            std::cerr << "NaN detected in Tensor3D during: " << operation << "\n";
+            
+            // get backtrace
+            void* callstack[128];
+            int frames = backtrace(callstack, 128);
+            char** strs = backtrace_symbols(callstack, frames);
+            
+            // print stack trace
+            for (int i = 0; i < frames; ++i) {
+                std::cerr << strs[i] << "\n";
+            }
+            free(strs);
+            
+            throw std::runtime_error("NaN detected");
+        }
+    }
 }

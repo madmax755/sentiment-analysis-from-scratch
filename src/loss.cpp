@@ -5,8 +5,8 @@ float CrossEntropyLoss::compute(const Tensor3D& predicted, const Tensor3D& targe
     float loss = 0.0f;
     for (size_t i = 0; i < predicted.height; ++i) {
         for (size_t j = 0; j < predicted.width; ++j) {
-            // add small epsilon (1e-10) to prevent log(0)
-            loss -= target(0, i, j) * std::log(predicted(0, i, j) + 1e-10f);
+            // add small epsilon (1e-7) to prevent log(0)
+            loss -= target(0, i, j) * std::log(predicted(0, i, j) + 1e-7f);
         }
     }
     return loss / predicted.width;  // average loss over batch

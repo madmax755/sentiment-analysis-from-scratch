@@ -217,14 +217,19 @@ class GRUCell {
               x(input_size, 1) {}
     };
     
+    // store the intermediate states for each timestep for each thread
     std::unordered_map<std::thread::id, std::vector<TimeStep>> time_steps;
     std::unique_ptr<std::mutex> timesteps_mutex;
 
     // clear the stored states
     void clear_states() {
         std::lock_guard<std::mutex> lock(*timesteps_mutex);
-        time_steps[std::this_thread::get_id()].clear();
+        auto& vec = time_steps[std::this_thread::get_id()];
+        vec.clear();
+        vec.shrink_to_fit();  // Release the memory back
+        time_steps.erase(std::this_thread::get_id());
     }
+    
 
     // get the timesteps for the current thread
     std::vector<TimeStep>& get_thread_timesteps() {
@@ -366,7 +371,7 @@ class GRUCell {
     }
 
     // forward pass that stores states
-    Tensor3D forward(const Tensor3D& x, const Tensor3D& h_prev) {
+    Tensor3D forward_store(const Tensor3D& x, const Tensor3D& h_prev) {
         TimeStep step(hidden_size, input_size);
         step.x = x;
         step.h_prev = h_prev;
@@ -385,6 +390,24 @@ class GRUCell {
 
         get_thread_timesteps().push_back(step);
         return step.h;
+    }
+
+    // forward pass that does not store states - used for evaluation so we dont clog up time_steps
+    Tensor3D forward(const Tensor3D& x, const Tensor3D& h_prev) {
+
+        // update gate
+        Tensor3D z = (W_z * x + U_z * h_prev + b_z).apply(sigmoid);
+
+        // reset gate
+        Tensor3D r = (W_r * x + U_r * h_prev + b_r).apply(sigmoid);
+
+        // candidate hidden state
+        Tensor3D h_candidate = (W_h * x + U_h * (r.hadamard(h_prev)) + b_h).apply(std::tanh);
+
+        // final hidden state
+        Tensor3D h = z.hadamard(h_prev) + (z.apply([](float x) { return 1.0f - x; }).hadamard(h_candidate));
+
+        return h;
     }
 
     GRUGradients backpropagate(const Tensor3D& final_gradient) {
@@ -1343,7 +1366,7 @@ class Predictor {
     }
 
     // process sequence and return prediction (full feedforward pass)
-    Tensor3D predict(const std::vector<Tensor3D>& input_sequence) {
+    Tensor3D predict(const std::vector<Tensor3D>& input_sequence, bool store_states = false) {
         if (input_sequence.empty()) {
             throw std::runtime_error("can't predict on empty input sequence");
         }
@@ -1353,7 +1376,11 @@ class Predictor {
 
         // process sequence through GRU
         for (const auto& x : input_sequence) {
-            h_t = gru.forward(x, h_t);
+            if (store_states) {
+                h_t = gru.forward_store(x, h_t);
+            } else {
+                h_t = gru.forward(x, h_t);
+            }
         }
 
         // final linear layer
@@ -1366,7 +1393,7 @@ class Predictor {
 
         // process sequence through GRU
         for (const auto& x : input_sequence) {
-            h_t = gru.forward(x, h_t);
+            h_t = gru.forward_store(x, h_t);
         }
 
         // final hidden state
@@ -1653,7 +1680,7 @@ class Predictor {
 
         for (const auto& example : test_data) {
             // get prediction and compute loss
-            Tensor3D prediction = predict(example.sequence);
+            Tensor3D prediction = predict(example.sequence, false);
             metrics.loss += this->loss->compute(prediction, example.target);
 
             // get predicted and actual class (assuming binary classification)
@@ -1870,7 +1897,7 @@ std::vector<TrainingExample> training_examples_from_csv(const std::string& filen
 }
 
 // todo:
-// - add gradient clipping
+
 
 
 int main() {
@@ -1879,7 +1906,7 @@ int main() {
     Tokeniser tokeniser("../data/glove.6B.100d.txt");
 
     const size_t batch_size = 100;
-    const size_t epochs = 75;
+    const size_t epochs = 50;
 
     // load training and test data
     BatchDataLoader training_loader("../data/imdb_clean_train.csv", tokeniser, batch_size);

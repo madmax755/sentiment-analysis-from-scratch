@@ -78,6 +78,7 @@ public:
     void save_to_file(std::ofstream &file) const;
     void load_from_file(std::ifstream &file);
     std::pair<float, float> get_magnitudes() const;
+    void check_for_nans(const std::string& operation) const;
 };
 
 #endif
