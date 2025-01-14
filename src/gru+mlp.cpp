@@ -259,17 +259,23 @@ class GRUCell {
         // initialise gradients for this timestep
         GRUGradients timestep_grads(input_size, hidden_size);
 
+        // debug - clamping delta_h_t as it went to inf
+        float max_value = 1000.0f; // Choose an appropriate maximum value
+        Tensor3D clamped_delta_h_t = delta_h_t.apply([max_value](float x) {
+            return std::clamp(x, -max_value, max_value);
+        });
+
         // 1. Hidden state gradients
-        Tensor3D one_matrix(delta_h_t.height, delta_h_t.width);
+        Tensor3D one_matrix(clamped_delta_h_t.height, clamped_delta_h_t.width);
         for (size_t i = 0; i < one_matrix.height; i++) {
             for (size_t j = 0; j < one_matrix.width; j++) {
                 one_matrix(0, i, j) = 1.0f;
             }
         }
         
-        Tensor3D dh_tilde = delta_h_t.hadamard(one_matrix - step.z);
+        Tensor3D dh_tilde = clamped_delta_h_t.hadamard(one_matrix - step.z);
 
-        Tensor3D dz = delta_h_t.hadamard(step.h_prev - step.h_candidate);
+        Tensor3D dz = clamped_delta_h_t.hadamard(step.h_prev - step.h_candidate);
 
         // 2. Candidate state gradients
         Tensor3D dg = dh_tilde.hadamard(step.h_candidate.apply([](float x) { return 1.0f - x * x; }));  // tanh derivative
@@ -303,7 +309,7 @@ class GRUCell {
         dh_prev = dh_prev + timestep_grads.dU_z.transpose() * dz_total;
 
         // 5. Final hidden state contribution
-        dh_prev = dh_prev + delta_h_t.hadamard(step.z);
+        dh_prev = dh_prev + clamped_delta_h_t.hadamard(step.z);
 
         // return both values
         return BackwardResult(timestep_grads, dh_prev);
@@ -617,6 +623,8 @@ class MLPOptimiser {
         float norm = scaled_gradients.calculate_norm();
         if (norm > max_norm) {
             scaled_gradients.scale(max_norm / norm);
+            //debug
+            std::cout << "clipped mlp\n";
         }
         return scaled_gradients;
     }
@@ -920,7 +928,10 @@ class GRUOptimiser {
         float norm = scaled_gradients.calculate_norm();
         if (norm > max_norm) {
             scaled_gradients.scale(max_norm / norm);
+            //debug
+            std::cout << "clipped gru\n";
         }
+        
         return scaled_gradients;
     }
 };
@@ -1625,7 +1636,10 @@ class Predictor {
                     std::cout << " - " << magnitudes << std::endl;
 
                 } else {
-                    std::cout << "\rBatch " << batch_count << "/" << full_batches + 1 << " complete" << std::flush;
+                    std::cout << "\rBatch " << batch_count << "/" << full_batches + 1 << " complete";
+                    // get weight magnitudes
+                    auto magnitudes = get_weight_magnitudes();
+                    std::cout << " - " << magnitudes << std::endl;
                 }
             }
 
@@ -1949,12 +1963,12 @@ int main() {
     auto input_features = 100;
     size_t hidden_size = 128;
     size_t output_size = 2;
-    std::vector<int> mlp_topology = {static_cast<int>(hidden_size), 128, 32, static_cast<int>(output_size)};
+    std::vector<int> mlp_topology = {static_cast<int>(hidden_size), 64, 32, static_cast<int>(output_size)};
     std::vector<std::string> mlp_activation_functions = {"relu", "relu", "relu", "softmax"};
 
     Predictor predictor(input_features, hidden_size, output_size, mlp_topology);
-    predictor.set_gru_optimiser(std::make_unique<GRUAdamWOptimiser>(0.005, 0.9, 0.999, 1e-6, 0.003, 1.0));
-    predictor.set_mlp_optimiser(std::make_unique<MLPAdamWOptimiser>(0.005, 0.9, 0.999, 1e-6, 0.003, 1.0));
+    predictor.set_gru_optimiser(std::make_unique<GRUAdamWOptimiser>(0.001, 0.9, 0.999, 1e-6, 0.003, 1.0));
+    predictor.set_mlp_optimiser(std::make_unique<MLPAdamWOptimiser>(0.001, 0.9, 0.999, 1e-6, 0.003, 1.0));
     predictor.set_loss(std::make_unique<CrossEntropyLoss>());
 
     predictor.train_with_batches(training_loader, test_loader, epochs);
