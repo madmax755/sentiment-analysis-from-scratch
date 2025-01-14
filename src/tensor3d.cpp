@@ -3,6 +3,8 @@
 #include <fstream>
 #include <execinfo.h>  // for backtrace
 #include <cxxabi.h>    // for demangling C++ names
+#include <dlfcn.h>   // for dladdr
+#include <cxxabi.h>  // for demangling
 
 
 Tensor3D::Tensor3D() : height(0), width(0), depth(0) {}
@@ -493,17 +495,37 @@ std::pair<float, float> Tensor3D::get_magnitudes() const {
 //debug 
 void Tensor3D::check_for_nans(const std::string& operation) const {
     for (const auto& val : data) {
-        if (std::isnan(val)) {
-            std::cerr << "NaN detected in Tensor3D during: " << operation << "\n";
+        if (std::isnan(val) || std::isinf(val)) {
+            if (std::isnan(val)) {
+                std::cerr << "NaN detected in Tensor3D during: " << operation << "\n";
+            } else {
+                std::cerr << "Inf detected in Tensor3D during: " << operation << "\n";
+            }
             
             // get backtrace
             void* callstack[128];
             int frames = backtrace(callstack, 128);
             char** strs = backtrace_symbols(callstack, frames);
             
-            // print stack trace
+            // print stack trace with demangled names
             for (int i = 0; i < frames; ++i) {
-                std::cerr << strs[i] << "\n";
+                Dl_info info;
+                if (dladdr(callstack[i], &info)) {
+                    // demangle the C++ name
+                    int status;
+                    char* demangled = abi::__cxa_demangle(info.dli_sname, nullptr, 0, &status);
+                    const char* name = status == 0 ? demangled : info.dli_sname;
+                    
+                    std::cerr << "Frame " << i << ": " 
+                             << (name ? name : "??") 
+                             << " in " << info.dli_fname 
+                             << " at " << callstack[i] << "\n";
+                             
+                    free(demangled);
+                } else {
+                    // fallback to original backtrace string if dladdr fails
+                    std::cerr << strs[i] << "\n";
+                }
             }
             free(strs);
             

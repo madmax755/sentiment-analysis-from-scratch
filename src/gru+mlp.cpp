@@ -266,14 +266,15 @@ class GRUCell {
                 one_matrix(0, i, j) = 1.0f;
             }
         }
-
+        
         Tensor3D dh_tilde = delta_h_t.hadamard(one_matrix - step.z);
+
         Tensor3D dz = delta_h_t.hadamard(step.h_prev - step.h_candidate);
 
         // 2. Candidate state gradients
         Tensor3D dg = dh_tilde.hadamard(step.h_candidate.apply([](float x) { return 1.0f - x * x; }));  // tanh derivative
 
-        timestep_grads.dW_h = dg * step.x.transpose();
+        timestep_grads.dW_h = (dg * step.x.transpose());
         timestep_grads.dU_h = dg * (step.r.hadamard(step.h_prev)).transpose();
         timestep_grads.db_h = dg;
 
@@ -752,7 +753,7 @@ class MLPAdamOptimiser : public MLPOptimiser {
      * @param b2 The beta2 parameter (default: 0.9f99).
      * @param eps The epsilon parameter for numerical stability (default: 1e-8).
      */
-    MLPAdamOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float clip_norm = 1.0f)
+    MLPAdamOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-6f, float clip_norm = 1.0f)
         : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0), clip_norm(clip_norm) {}
 
     /**
@@ -838,7 +839,7 @@ class MLPAdamWOptimiser : public MLPOptimiser {
      * @param eps The epsilon parameter for numerical stability (default: 1e-8).
      * @param wd The weight decay parameter (default: 0.0f1).
      */
-    MLPAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float wd = 0.001f, float clip_norm = 1.0f)
+    MLPAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-6f, float wd = 0.001f, float clip_norm = 1.0f)
         : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), clip_norm(clip_norm) {}
 
     /**
@@ -1029,7 +1030,7 @@ class GRUAdamOptimiser : public GRUOptimiser {
     }
 
    public:
-    GRUAdamOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float clip_norm = 1.0f)
+    GRUAdamOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-6f, float clip_norm = 1.0f)
         : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0), m(0, 0), v(0, 0), clip_norm(clip_norm) {}
 
     void compute_and_apply_updates(GRUCell& gru, const GRUGradients& grads) override {
@@ -1094,7 +1095,7 @@ class GRUAdamWOptimiser : public GRUOptimiser {
     }
 
    public:
-    GRUAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float wd = 0.001f, float clip_norm = 1.0f)
+    GRUAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-6f, float wd = 0.001f, float clip_norm = 1.0f)
         : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), m(0, 0), v(0, 0), clip_norm(clip_norm) {}
 
     void compute_and_apply_updates(GRUCell& gru, const GRUGradients& grads) override {
@@ -1678,43 +1679,76 @@ class Predictor {
         float false_negatives = 0.0f;
         size_t total = test_data.size();
 
-        for (const auto& example : test_data) {
-            // get prediction and compute loss
-            Tensor3D prediction = predict(example.sequence, false);
-            metrics.loss += this->loss->compute(prediction, example.target);
+        auto no_threads = std::thread::hardware_concurrency();
+        size_t batch_size = std::round(total/no_threads);
 
-            // get predicted and actual class (assuming binary classification)
-            bool predicted_positive = prediction(0, 0, 0) > prediction(0, 1, 0);
-            bool actual_positive = example.target(0, 0, 0) > example.target(0, 1, 0);
+        std::vector<std::thread> threads(no_threads);
+        std::vector<std::tuple<float, float, float, float>> thread_results(no_threads);
 
-            // update metrics
-            if (predicted_positive == actual_positive) {
-                metrics.accuracy += 1.0f;
-            }
+        for (int t = 0; t < no_threads; t++) {
+            threads[t] = std::thread(
+                [&, t]() {
+                    size_t start = t * batch_size;
+                    size_t end = std::min((t+1)*batch_size, total);
 
-            if (predicted_positive && actual_positive) {
-                true_positives += 1.0f;
-            } else if (predicted_positive && !actual_positive) {
-                false_positives += 1.0f;
-            } else if (!predicted_positive && actual_positive) {
-                false_negatives += 1.0f;
-            }
+                    float local_loss = 0.0f;
+                    float local_accuracy = 0.0f;
+                    float local_true_positives = 0.0f;
+                    float local_false_positives = 0.0f;
+                    float local_false_negatives = 0.0f;
+
+                    for (size_t i = start; i < end; i++) {
+                        auto example = test_data[i];
+                        // get prediction and compute loss
+                        Tensor3D prediction = predict(example.sequence, false);
+                        local_loss += this->loss->compute(prediction, example.target);
+
+                        // get predicted and actual class (assuming binary classification)
+                        bool predicted_positive = prediction(0, 0, 0) > prediction(0, 1, 0);
+                        bool actual_positive = example.target(0, 0, 0) > example.target(0, 1, 0);
+
+                        // update metrics
+                        if (predicted_positive == actual_positive) {
+                            local_accuracy += 1.0f;
+                        }
+
+                        if (predicted_positive && actual_positive) {
+                            local_true_positives += 1.0f;
+                        } else if (predicted_positive && !actual_positive) {
+                            local_false_positives += 1.0f;
+                        } else if (!predicted_positive && actual_positive) {
+                            local_false_negatives += 1.0f;
+                        }
+                    }
+
+                    thread_results[t] = std::make_tuple(local_loss, local_accuracy, 
+                                                      local_true_positives, local_false_positives);
+                }
+            );
         }
 
-        // average the loss
+        // wait for all threads to complete
+        for (auto& thread : threads) {
+            thread.join();
+        }
+
+        // aggregate results from all threads
+        for (const auto& result : thread_results) {
+            metrics.loss += std::get<0>(result);
+            metrics.accuracy += std::get<1>(result);
+            true_positives += std::get<2>(result);
+            false_positives += std::get<3>(result);
+        }
+
+        // calculate final metrics
         metrics.loss /= total;
-
-        // calculate accuracy
         metrics.accuracy /= total;
-
-        // calculate precision
-        metrics.precision = true_positives / (true_positives + false_positives + 1e-10f);
-
-        // calculate recall
-        metrics.recall = true_positives / (true_positives + false_negatives + 1e-10f);
-
-        // calculate f1 score
-        metrics.f1_score = 2.0f * (metrics.precision * metrics.recall) / (metrics.precision + metrics.recall + 1e-10f);
+        
+        // calculate precision, recall and f1 score
+        metrics.precision = true_positives / (true_positives + false_positives);
+        metrics.recall = true_positives / (true_positives + false_negatives);
+        metrics.f1_score = 2 * (metrics.precision * metrics.recall) / 
+                          (metrics.precision + metrics.recall);
 
         return metrics;
     }
@@ -1919,8 +1953,8 @@ int main() {
     std::vector<std::string> mlp_activation_functions = {"relu", "relu", "relu", "softmax"};
 
     Predictor predictor(input_features, hidden_size, output_size, mlp_topology);
-    predictor.set_gru_optimiser(std::make_unique<GRUAdamWOptimiser>());
-    predictor.set_mlp_optimiser(std::make_unique<MLPAdamWOptimiser>());
+    predictor.set_gru_optimiser(std::make_unique<GRUAdamWOptimiser>(0.005, 0.9, 0.999, 1e-6, 0.003, 1.0));
+    predictor.set_mlp_optimiser(std::make_unique<MLPAdamWOptimiser>(0.005, 0.9, 0.999, 1e-6, 0.003, 1.0));
     predictor.set_loss(std::make_unique<CrossEntropyLoss>());
 
     predictor.train_with_batches(training_loader, test_loader, epochs);
