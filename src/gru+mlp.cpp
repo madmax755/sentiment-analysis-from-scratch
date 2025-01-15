@@ -1953,7 +1953,7 @@ int main() {
     // paths are relative to compiled executable location
     Tokeniser tokeniser("../data/glove.6B.100d.txt");
 
-    const size_t batch_size = 100;
+    const size_t batch_size = 200;
     const size_t epochs = 50;
 
     // load training and test data
@@ -1961,9 +1961,9 @@ int main() {
     BatchDataLoader test_loader("../data/imdb_clean_test.csv", tokeniser, 200);
 
     auto input_features = 100;
-    size_t hidden_size = 128;
+    size_t hidden_size = 256;
     size_t output_size = 2;
-    std::vector<int> mlp_topology = {static_cast<int>(hidden_size), 64, 32, static_cast<int>(output_size)};
+    std::vector<int> mlp_topology = {static_cast<int>(hidden_size), 128, 64, static_cast<int>(output_size)};
     std::vector<std::string> mlp_activation_functions = {"relu", "relu", "relu", "softmax"};
 
     Predictor predictor(input_features, hidden_size, output_size, mlp_topology);
