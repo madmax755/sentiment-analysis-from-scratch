@@ -30,6 +30,7 @@ public:
     const float& operator()(size_t d, size_t h, size_t w) const;
     Tensor3d operator()(size_t d);
     const Tensor3d operator()(size_t d) const;
+    Tensor3d col(int index) const;
     std::vector<float>& get_flat_data();
     const std::vector<float>& get_flat_data() const;
 

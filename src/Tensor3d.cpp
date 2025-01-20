@@ -75,6 +75,27 @@ const Tensor3d Tensor3d::operator()(size_t d) const {
     return Tensor3d(1, height, width, new_data);
 }
 
+// extract column at given columnindex
+Tensor3d Tensor3d::col(int index) const {
+    // convert negative index to positive
+    if (index < 0) {
+        index = width + index;
+    }
+
+    // check if index is within range
+    if (index < 0 || index >= width) {
+        throw std::runtime_error("index out of range in Tensor3d::col");
+    }
+
+    Tensor3d result(1, height, 1);
+
+    for (size_t h = 0; h < height; h++) {
+        result(0, h, 0) = (*this)(0, h, index);
+    }
+
+    return result;
+}
+
 std::vector<float>& Tensor3d::get_flat_data() { return data; }
 
 const std::vector<float>& Tensor3d::get_flat_data() const { return data; }
