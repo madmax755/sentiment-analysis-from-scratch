@@ -12,8 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "../include/loss.hpp"
 #include "../include/Tensor3d.hpp"
+#include "../include/loss.hpp"
 #include "../include/tokeniser.hpp"
 
 // sigmoid activation function
@@ -264,7 +264,6 @@ struct MLPGradients {
     }
 };
 
-
 class GRUCell {
    private:
     // store sequence of states for BPTT
@@ -289,9 +288,6 @@ class GRUCell {
     // clear the stored states
     void clear_states() {
         std::lock_guard<std::mutex> lock(*timesteps_mutex);
-        auto& vec = time_steps[std::this_thread::get_id()];
-        vec.clear();
-        vec.shrink_to_fit();  // Release the memory back
         time_steps.erase(std::this_thread::get_id());
     }
 
@@ -477,7 +473,6 @@ class GRUCell {
     }
 
     GRUGradients backpropagate(const Tensor3d& attention_hidden_state_gradients) {
-
         Tensor3d dh_next = attention_hidden_state_gradients.col(-1);
         GRUGradients accumulated_grads(input_size, hidden_size);
         reset_gradients(accumulated_grads);
@@ -597,18 +592,38 @@ class AttentionLayer {
         Tensor3d dL_dH;  // gradient of hidden states
     };
 
+    // store the intermediate states for each timestep for each thread
+    // std::unordered_map<std::thread::id, std::vector<TimeStep>> time_steps;
+    // std::unique_ptr<std::mutex> timesteps_mutex;
+
+    std::unordered_map<std::thread::id, ForwardResult> forward_results;
+    std::unique_ptr<std::mutex> forward_results_mutex;
+
+    // get the forward results for the current thread
+    ForwardResult& get_thread_forward_results() {
+        std::lock_guard<std::mutex> lock(*forward_results_mutex);
+        return forward_results[std::this_thread::get_id()];
+    }
+
+    // clear the stored states
+    void clear_states() {
+        std::lock_guard<std::mutex> lock(*forward_results_mutex);
+        forward_results.erase(std::this_thread::get_id());
+    }
+
    public:
     Tensor3d weights;
     Tensor3d scoring_vector;
     size_t attention_size;
     size_t hidden_size;
 
-    ForwardResult forward_result;  // storing necessary values for backprop
-                                   // fixme make this an unordered_map if/when multithreaded
-
     // assumes hidden_states are (1xhidden_sizex1)
     AttentionLayer(size_t hidden_size, size_t attention_size)
-        : weights(attention_size, hidden_size), scoring_vector(1, attention_size), attention_size(attention_size), hidden_size(hidden_size) {
+        : weights(attention_size, hidden_size),
+          scoring_vector(1, attention_size),
+          attention_size(attention_size),
+          hidden_size(hidden_size),
+          forward_results_mutex(std::make_unique<std::mutex>()) {
         weights.xavier_initialise();
         scoring_vector.xavier_initialise();
     }
@@ -649,6 +664,7 @@ class AttentionLayer {
         Tensor3d C = H * A.transpose();
 
         // store intermediate results for backprop
+        auto& forward_result = get_thread_forward_results();
         forward_result = {H, A, S, T};
 
         return C;
@@ -665,30 +681,41 @@ class AttentionLayer {
 
         auto tanh_derivative = [](float x) { return 1.0f - std::tanh(x) * std::tanh(x); };
 
+        auto& forward_result = get_thread_forward_results();
+
         Tensor3d dC_dA = forward_result.H.transpose();  // normal matrix product derivative rule
-        Tensor3d dA_dS =
-            forward_result.A.diag() -
-            (forward_result.A.transpose() * forward_result.A); // apparantly in this case the derivative through softmax is diag(A) - A^TA
+        Tensor3d dA_dS = forward_result.A.diag() -
+                         (forward_result.A.transpose() *
+                          forward_result.A);          // apparantly in this case the derivative through softmax is diag(A) - A^TA
         Tensor3d dS_dT = scoring_vector.transpose();  // normal matrix product derivative rule (but remebering v is a row vector)
         // use hadamard with dT/dY
         Tensor3d dT_dY = forward_result.T.apply(tanh_derivative);  // tanh derivative tanh'(x) = sech^2(x) = 1 - tanh^2(x)
         Tensor3d dY_dW = forward_result.H.transpose();             // normal matrix product derivative rule
         Tensor3d dY_dH = weights;
 
-        Tensor3d dL_dA = (dC_dA * dL_dC).transpose(); // this needs to be (1, sequence_length) like A - transpose and order of operations chosen to fix dimensions
-        Tensor3d dL_dS = dL_dA * dA_dS; // this needs to be (1, sequence_length) like S - order of operations chosen to fix dimensions
-        Tensor3d dL_dT = dS_dT * dL_dS; // this needs to be (attention_size, sequence_length) like T - order of operations chosen to fix dimensions
-        Tensor3d dL_dY = dL_dT.hadamard(dT_dY);  // tanh derivative tanh'(x) = sech^2(x) = 1 - tanh^2(x), why the hadamard? element-wise is weird
+        Tensor3d dL_dA = (dC_dA * dL_dC).transpose();  // this needs to be (1, sequence_length) like A - transpose and order of
+                                                       // operations chosen to fix dimensions
+        Tensor3d dL_dS =
+            dL_dA * dA_dS;  // this needs to be (1, sequence_length) like S - order of operations chosen to fix dimensions
+        Tensor3d dL_dT =
+            dS_dT *
+            dL_dS;  // this needs to be (attention_size, sequence_length) like T - order of operations chosen to fix dimensions
+        Tensor3d dL_dY = dL_dT.hadamard(
+            dT_dY);  // tanh derivative tanh'(x) = sech^2(x) = 1 - tanh^2(x), why the hadamard? element-wise is weird
         Tensor3d dL_dW = dL_dY * dY_dW;
 
         // H has two ways to influence C, direcly by C=HA^T, and indirectly through A.
         Tensor3d dL_dH_direct = dL_dC * forward_result.A;  // normal matrix product derivative rule
-        Tensor3d dL_dH_indirect = (dY_dH.transpose() * dL_dY);  // (hidden_size, attention_size) * (attention_size, sequence_length) = (hidden_size, sequence_length)
-        
+        Tensor3d dL_dH_indirect =
+            (dY_dH.transpose() *
+             dL_dY);  // (hidden_size, attention_size) * (attention_size, sequence_length) = (hidden_size, sequence_length)
+
         Tensor3d dL_dH = dL_dH_direct + dL_dH_indirect;
 
         Tensor3d dL_dv = dL_dS * forward_result.T.transpose();
 
+        // clear the intermediate forward pass information for this thread
+        clear_states();
         return {dL_dW, dL_dv, dL_dH};
     }
 };
@@ -1329,7 +1356,7 @@ class AttentionOptimiser {
 };
 
 class AttentionAdamWOptimiser : public AttentionOptimiser {
-    private:
+   private:
     float learning_rate;
     float beta1;
     float beta2;
@@ -1365,12 +1392,18 @@ class AttentionAdamWOptimiser : public AttentionOptimiser {
         param = param - update * learning_rate;
     }
 
-
-    public:
-    AttentionAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-6f, float wd = 0.001f, float clip_norm = 1.0f)
+   public:
+    AttentionAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-6f, float wd = 0.001f,
+                            float clip_norm = 1.0f)
         : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), m(0, 0), v(0, 0), clip_norm(clip_norm) {}
 
     void compute_and_apply_updates(AttentionLayer& attention, const AttentionGradients& gradients) override {
+        // intialise m and v if needed
+        if (m.dL_dW.height == 0) {
+            m = AttentionGradients(attention.attention_size, attention.hidden_size);
+            v = AttentionGradients(attention.attention_size, attention.hidden_size);
+        }
+
         // clip gradients
         AttentionGradients clipped_gradients = clip_gradients(gradients, clip_norm);
 
@@ -1614,14 +1647,17 @@ class Predictor {
     // set optimiser - call before training
     void set_gru_optimiser(std::unique_ptr<GRUOptimiser> new_optimiser) { gru_optimiser = std::move(new_optimiser); }
     // set optimiser - call before training
-    void set_attention_optimiser(std::unique_ptr<AttentionOptimiser> new_optimiser) { attention_optimiser = std::move(new_optimiser); }
+    void set_attention_optimiser(std::unique_ptr<AttentionOptimiser> new_optimiser) {
+        attention_optimiser = std::move(new_optimiser);
+    }
     // set optimiser - call before training
     void set_mlp_optimiser(std::unique_ptr<MLPOptimiser> new_optimiser) { mlp_optimiser = std::move(new_optimiser); }
     // set loss function - call before training
     void set_loss(std::unique_ptr<Loss> new_loss) { loss = std::move(new_loss); }
 
     // update parameters using optimisers
-    void update_parameters(const GRUGradients& gru_grads, const MLPGradients& mlp_grads, const AttentionGradients& attention_grads) {
+    void update_parameters(const GRUGradients& gru_grads, const MLPGradients& mlp_grads,
+                           const AttentionGradients& attention_grads) {
         if (!gru_optimiser) {
             throw std::runtime_error("no optimiser set");
         }
@@ -1673,13 +1709,14 @@ class Predictor {
     }
 
     // gets the gradients for a single training example
-    std::tuple<GRUGradients, AttentionGradients, MLPGradients> compute_gradients(const std::vector<Tensor3d>& input_sequence, const Tensor3d& target) {
+    std::tuple<GRUGradients, AttentionGradients, MLPGradients> compute_gradients(const std::vector<Tensor3d>& input_sequence,
+                                                                                 const Tensor3d& target) {
         // forward pass
         Tensor3d context_vector = attention.forward(feedforward_gru(input_sequence));
 
         auto [mlp_gradients, input_layer_gradient, output] =
             mlp_optimiser->calculate_gradient(mlp.layers, context_vector, target, *loss);
-        
+
         // backpropagate through attention layer
         auto [dL_dW, dL_dv, dL_dH] = attention.backward(input_layer_gradient);
 
@@ -1687,7 +1724,7 @@ class Predictor {
         AttentionGradients attention_gradients(dL_dW.height, dL_dv.width);
         attention_gradients.dL_dW = dL_dW;
         attention_gradients.dL_dv = dL_dv;
-    
+
         // backpropagate through GRU
         auto gru_gradients = gru.backpropagate(dL_dH);
         return {gru_gradients, attention_gradients, mlp_gradients};
@@ -1790,7 +1827,8 @@ class Predictor {
 
                 // initialise storage for each threads calculated gradients
                 std::vector<GRUGradients> thread_gru_grads(no_threads, GRUGradients(input_size, hidden_size));
-                std::vector<AttentionGradients> thread_attention_grads(no_threads, AttentionGradients(attention.attention_size, attention.hidden_size));
+                std::vector<AttentionGradients> thread_attention_grads(
+                    no_threads, AttentionGradients(attention.attention_size, attention.hidden_size));
                 std::vector<MLPGradients> thread_mlp_grads(no_threads);
                 std::vector<std::thread> threads;
 
@@ -1840,7 +1878,7 @@ class Predictor {
                 averaged_gru_gradients = averaged_gru_gradients * (1.0f / batch.size());
                 averaged_mlp_gradients = averaged_mlp_gradients * (1.0f / batch.size());
                 averaged_attention_gradients = averaged_attention_gradients * (1.0f / batch.size());
-                
+
                 // update parameters
                 update_parameters(averaged_gru_gradients, averaged_mlp_gradients, averaged_attention_gradients);
 
@@ -1989,7 +2027,7 @@ class Predictor {
         return metrics;
     }
 
-    // fixme do not save attention layer 
+    // fixme do not save attention layer
     // void save_model(const std::string& filepath) const {
     //     std::ofstream file(filepath, std::ios::binary);
     //     if (!file.is_open()) {
@@ -2165,8 +2203,6 @@ std::vector<TrainingExample> training_examples_from_csv(const std::string& filen
     return examples;
 }
 
-// todo: CALL ATTENTION BACKWARD AND INTEGRATE INTO GRU BACKWARD
-
 int main() {
     // load embeddings and training data
     // paths are relative to compiled executable location
@@ -2186,14 +2222,13 @@ int main() {
     const std::vector<int> mlp_topology = {static_cast<int>(hidden_size), 64, 32, static_cast<int>(output_size)};
     const std::vector<std::string> mlp_activation_functions = {"relu", "relu", "softmax"};
 
-
     Predictor predictor(input_features, hidden_size, output_size, attention_size, mlp_topology, mlp_activation_functions);
     predictor.set_gru_optimiser(std::make_unique<GRUAdamWOptimiser>(0.001, 0.9, 0.999, 1e-6, 0.003, 1.0));
     predictor.set_attention_optimiser(std::make_unique<AttentionAdamWOptimiser>(0.001, 0.9, 0.999, 1e-6, 0.003, 1.0));
     predictor.set_mlp_optimiser(std::make_unique<MLPAdamWOptimiser>(0.001, 0.9, 0.999, 1e-6, 0.003, 1.0));
     predictor.set_loss(std::make_unique<CrossEntropyLoss>());
 
-    predictor.train_with_batches(training_loader, test_loader, epochs, 1);
+    predictor.train_with_batches(training_loader, test_loader, epochs);
 
     return 0;
 }
