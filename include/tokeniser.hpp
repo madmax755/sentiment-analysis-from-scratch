@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <fstream>
 #include <sstream>
-#include "tensor3d.hpp"
+#include "Tensor3d.hpp"
 class Tokeniser {
     private:
         // map to store word -> embedding vector
@@ -20,7 +20,7 @@ class Tokeniser {
         Tokeniser(const std::string& glove_path);
 
         // tokenise text and convert to embeddings
-        std::vector<Tensor3D> string_to_embeddings(const std::string& text);
+        std::vector<Tensor3d> string_to_embeddings(const std::string& text);
 
         // simple word tokenisation
         std::vector<std::string> tokenise(const std::string& text);

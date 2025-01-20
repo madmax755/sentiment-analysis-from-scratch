@@ -1,4 +1,4 @@
-#include "../include/tensor3d.hpp"
+#include "../include/Tensor3d.hpp"
 
 #include <fstream>
 #include <execinfo.h>  // for backtrace
@@ -7,20 +7,20 @@
 #include <cxxabi.h>  // for demangling
 
 
-Tensor3D::Tensor3D() : height(0), width(0), depth(0) {}
+Tensor3d::Tensor3d() : height(0), width(0), depth(0) {}
 
 // legacy constructor for 2D matrix compatibility 
-Tensor3D::Tensor3D(size_t rows, size_t cols) : depth(1), height(rows), width(cols) { 
+Tensor3d::Tensor3d(size_t rows, size_t cols) : depth(1), height(rows), width(cols) { 
     data.resize(depth * height * width); 
 }
 
 // construct from dimensions
-Tensor3D::Tensor3D(size_t depth, size_t height, size_t width) : height(height), width(width), depth(depth) {
+Tensor3d::Tensor3d(size_t depth, size_t height, size_t width) : height(height), width(width), depth(depth) {
     data.resize(depth * height * width);
 }
 
 // construct from flat vector
-Tensor3D::Tensor3D(size_t depth, size_t height, size_t width, const std::vector<float> &data)
+Tensor3d::Tensor3d(size_t depth, size_t height, size_t width, const std::vector<float> &data)
     : height(height), width(width), depth(depth) {
     if (data.size() != depth * height * width) {
         throw std::invalid_argument("data length and dimension mismatch");
@@ -29,7 +29,7 @@ Tensor3D::Tensor3D(size_t depth, size_t height, size_t width, const std::vector<
 }
 
 // construct from 3D vector
-Tensor3D::Tensor3D(size_t depth, size_t height, size_t width, const std::vector<std::vector<std::vector<float>>> &data)
+Tensor3d::Tensor3d(size_t depth, size_t height, size_t width, const std::vector<std::vector<std::vector<float>>> &data)
     : height(height), width(width), depth(depth) {
     if (data.size() != depth or data[0].size() != height or data[0][0].size() != width) {
         throw std::invalid_argument("data length and dimension mismatch");
@@ -45,42 +45,42 @@ Tensor3D::Tensor3D(size_t depth, size_t height, size_t width, const std::vector<
 }
 
 // compute linear index from 3D coordinates
-size_t Tensor3D::index(size_t d, size_t h, size_t w) { return d * (height * width) + h * (width) + w; }
-const size_t Tensor3D::index(size_t d, size_t h, size_t w) const { return d * (height * width) + h * (width) + w; }
+size_t Tensor3d::index(size_t d, size_t h, size_t w) { return d * (height * width) + h * (width) + w; }
+const size_t Tensor3d::index(size_t d, size_t h, size_t w) const { return d * (height * width) + h * (width) + w; }
 
 // access elements using 3D coordinates
-float &Tensor3D::operator()(size_t d, size_t h, size_t w) {
+float &Tensor3d::operator()(size_t d, size_t h, size_t w) {
     if (d >= depth or h >= height or w >= width) {
-        throw std::runtime_error("index out of range in Tensor3D::operator()");
+        throw std::runtime_error("index out of range in Tensor3d::operator()");
     }
     return data[index(d, h, w)];
 }
-const float &Tensor3D::operator()(size_t d, size_t h, size_t w) const {
+const float &Tensor3d::operator()(size_t d, size_t h, size_t w) const {
     if (d >= depth or h >= height or w >= width) {
-        throw std::runtime_error("index out of range in Tensor3D::operator()");
+        throw std::runtime_error("index out of range in Tensor3d::operator()");
     }
     return data[index(d, h, w)];
 }
 
 // extract 2D slice at given depth
-Tensor3D Tensor3D::operator()(size_t d) {
+Tensor3d Tensor3d::operator()(size_t d) {
     size_t slice_size = width * height;
     std::vector<float> new_data(data.begin() + d * slice_size, data.begin() + d * slice_size + slice_size);
-    return Tensor3D(1, height, width, new_data);
+    return Tensor3d(1, height, width, new_data);
 }
 
-const Tensor3D Tensor3D::operator()(size_t d) const {
+const Tensor3d Tensor3d::operator()(size_t d) const {
     size_t slice_size = width * height;
     std::vector<float> new_data(data.begin() + d * slice_size, data.begin() + d * slice_size + slice_size);
-    return Tensor3D(1, height, width, new_data);
+    return Tensor3d(1, height, width, new_data);
 }
 
-std::vector<float>& Tensor3D::get_flat_data() { return data; }
+std::vector<float>& Tensor3d::get_flat_data() { return data; }
 
-const std::vector<float>& Tensor3D::get_flat_data() const { return data; }
+const std::vector<float>& Tensor3d::get_flat_data() const { return data; }
 
 // compute dot product with a kernel centered at specific position - the argument must be the kernel
-float Tensor3D::dot_with_kernel_at_position(const Tensor3D &kernel, size_t start_x, size_t start_y) const {
+float Tensor3d::dot_with_kernel_at_position(const Tensor3d &kernel, size_t start_x, size_t start_y) const {
     float sum = 0.0;
 
     // to facilitate start_x and start_y being the centre position
@@ -108,8 +108,8 @@ float Tensor3D::dot_with_kernel_at_position(const Tensor3D &kernel, size_t start
 }
 
 // return a new tensor with the width and height axis padded by 'amount'.
-Tensor3D Tensor3D::pad(const Tensor3D &input, int amount) {
-    Tensor3D output(input.depth, input.height + 2 * amount, input.width + 2 * amount);
+Tensor3d Tensor3d::pad(const Tensor3d &input, int amount) {
+    Tensor3d output(input.depth, input.height + 2 * amount, input.width + 2 * amount);
     for (int depth_index = 0; depth_index < output.depth; ++depth_index) {
         for (int height_index = amount; height_index < output.height - amount; ++height_index) {
             for (int width_index = amount; width_index < output.width - amount; ++width_index) {
@@ -122,7 +122,7 @@ Tensor3D Tensor3D::pad(const Tensor3D &input, int amount) {
 }
 
 // initialization methods
-void Tensor3D::he_initialise() {
+void Tensor3d::he_initialise() {
     std::random_device rd;
     std::mt19937 gen(rd());
     float std_dev = std::sqrt(2.0f / (height * width * depth));
@@ -133,7 +133,7 @@ void Tensor3D::he_initialise() {
     }
 }
 
-void Tensor3D::xavier_initialise() {
+void Tensor3d::xavier_initialise() {
     std::random_device rd;
     std::mt19937 gen(rd());
     float limit = std::sqrt(6.0f / (height * width * depth));
@@ -144,7 +144,7 @@ void Tensor3D::xavier_initialise() {
     }
 }
 
-void Tensor3D::uniform_initialise(float lower_bound, float upper_bound) {
+void Tensor3d::uniform_initialise(float lower_bound, float upper_bound) {
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis(lower_bound, upper_bound);
@@ -154,7 +154,7 @@ void Tensor3D::uniform_initialise(float lower_bound, float upper_bound) {
     }
 }
 
-void Tensor3D::zero_initialise() {
+void Tensor3d::zero_initialise() {
     for (auto &element : data) {
         element = 0.0f;
     }
@@ -163,26 +163,26 @@ void Tensor3D::zero_initialise() {
 // operators
 
 /**
- * @brief Overloads the multiplication operator for Tensor3D multiplication on each depth slice.
+ * @brief Overloads the multiplication operator for Tensor3d multiplication on each depth slice.
  * @param other The tensor to multiply with.
  * @return The resulting tensor after multiplication.
  */
-Tensor3D Tensor3D::operator*(const Tensor3D &other) const {
-    // check dimensions match for Tensor3D multiplication at each depth
+Tensor3d Tensor3d::operator*(const Tensor3d &other) const {
+    // check dimensions match for Tensor3d multiplication at each depth
     if (width != other.height) {
-        throw std::invalid_argument("tensor dimensions don't match for multiplication: (" + std::to_string(height) + "x" +
-                                    std::to_string(width) + "x" + std::to_string(depth) + ") * (" +
-                                    std::to_string(other.height) + "x" + std::to_string(other.width) + "x" +
-                                    std::to_string(other.depth) + ")");
+        throw std::invalid_argument("tensor dimensions don't match for multiplication: (" + std::to_string(depth) + "x" +
+                                    std::to_string(height) + "x" + std::to_string(width) + ") * (" +
+                                    std::to_string(other.depth) + "x" + std::to_string(other.height) + "x" +
+                                    std::to_string(other.width) + ")");
     }
     if (depth != other.depth) {
         throw std::invalid_argument("tensor depths must match for multiplication");
     }
 
     // result will have dimensions: (this.height x other.width x depth)
-    Tensor3D result(depth, height, other.width);
+    Tensor3d result(depth, height, other.width);
 
-    // perform Tensor3D multiplication for each depth slice
+    // perform Tensor3d multiplication for each depth slice
     for (size_t d = 0; d < depth; d++) {
         // cache-friendly loop order (k before j)
         for (size_t i = 0; i < height; i++) {
@@ -198,12 +198,12 @@ Tensor3D Tensor3D::operator*(const Tensor3D &other) const {
     return result;
 }
 
-Tensor3D Tensor3D::operator+(const Tensor3D &other) const {
+Tensor3d Tensor3d::operator+(const Tensor3d &other) const {
     if (height != other.height or width != other.width or depth != other.depth) {
         throw std::invalid_argument("tensor dimensions don't match for addition");
     }
 
-    Tensor3D result(depth, height, width);
+    Tensor3d result(depth, height, width);
     for (size_t d = 0; d < depth; d++) {
         for (size_t i = 0; i < height; i++) {
             for (size_t j = 0; j < width; j++) {
@@ -215,8 +215,8 @@ Tensor3D Tensor3D::operator+(const Tensor3D &other) const {
     return result;
 }
 
-Tensor3D Tensor3D::operator+(const float &other) const {
-    Tensor3D result(depth, height, width);
+Tensor3d Tensor3d::operator+(const float &other) const {
+    Tensor3d result(depth, height, width);
     for (size_t d = 0; d < depth; d++) {
         for (size_t i = 0; i < height; i++) {
             for (size_t j = 0; j < width; j++) {
@@ -228,12 +228,12 @@ Tensor3D Tensor3D::operator+(const float &other) const {
     return result;
 }
 
-Tensor3D Tensor3D::operator-(const Tensor3D &other) const {
+Tensor3d Tensor3d::operator-(const Tensor3d &other) const {
     if (height != other.height or width != other.width or depth != other.depth) {
         throw std::invalid_argument("tensor dimensions don't match for subtraction");
     }
 
-    Tensor3D result(depth, height, width);
+    Tensor3d result(depth, height, width);
     for (size_t d = 0; d < depth; d++) {
         for (size_t i = 0; i < height; i++) {
             for (size_t j = 0; j < width; j++) {
@@ -245,8 +245,8 @@ Tensor3D Tensor3D::operator-(const Tensor3D &other) const {
     return result;
 }
 
-Tensor3D Tensor3D::operator*(float scalar) const {
-    Tensor3D result(depth, height, width);
+Tensor3d Tensor3d::operator*(float scalar) const {
+    Tensor3d result(depth, height, width);
     for (size_t d = 0; d < depth; d++) {
         for (size_t i = 0; i < height; i++) {
             for (size_t j = 0; j < width; j++) {
@@ -258,12 +258,12 @@ Tensor3D Tensor3D::operator*(float scalar) const {
     return result;
 }
 
-Tensor3D Tensor3D::hadamard(const Tensor3D &other) const {
+Tensor3d Tensor3d::hadamard(const Tensor3d &other) const {
     if (height != other.height or width != other.width or depth != other.depth) {
         throw std::invalid_argument("tensor dimensions don't match for Hadamard product");
     }
 
-    Tensor3D result(depth, height, width);
+    Tensor3d result(depth, height, width);
     for (size_t d = 0; d < depth; d++) {
         for (size_t i = 0; i < height; i++) {
             for (size_t j = 0; j < width; j++) {
@@ -275,8 +275,8 @@ Tensor3D Tensor3D::hadamard(const Tensor3D &other) const {
     return result;
 }
 
-Tensor3D Tensor3D::apply(float (*func)(float)) const {
-    Tensor3D result(depth, height, width);
+Tensor3d Tensor3d::apply(float (*func)(float)) const {
+    Tensor3d result(depth, height, width);
     for (size_t d = 0; d < depth; d++) {
         for (size_t i = 0; i < height; i++) {
             for (size_t j = 0; j < width; j++) {
@@ -288,8 +288,8 @@ Tensor3D Tensor3D::apply(float (*func)(float)) const {
     return result;
 }
 
-Tensor3D Tensor3D::transpose() const {
-    Tensor3D result(depth, width, height);
+Tensor3d Tensor3d::transpose() const {
+    Tensor3d result(depth, width, height);
     for (size_t d = 0; d < depth; d++) {
         for (size_t i = 0; i < height; i++) {
             for (size_t j = 0; j < width; j++) {
@@ -301,36 +301,67 @@ Tensor3D Tensor3D::transpose() const {
     return result;
 }
 
-// softmax across height dimension for back-compatibility with old Tensor3D class
-Tensor3D Tensor3D::softmax() const {
-    Tensor3D result(depth, height, width);
+Tensor3d Tensor3d::softmax(std::string dim) const {
+    if (depth != 1) {
+        throw std::runtime_error("softmax_along_dim only supports 1xnxm tensors");
+    }
+    if (dim != "height" and dim != "width") {
+        throw std::runtime_error("dimension must be height or width");
+    }
 
-    for (size_t d = 0; d < depth; d++) {
-        // find max across height (class scores)
-        float max_val = -std::numeric_limits<float>::infinity();
-        for (size_t h = 0; h < height; h++) {
-            max_val = std::max(max_val, (*this)(d, h, 0));
+    Tensor3d result(1, height, width);
+    
+    if (dim == "height") {  // softmax across height dimension
+        // for each column
+        for (size_t w = 0; w < width; w++) {
+            // find max value in this column
+            float max_val = -std::numeric_limits<float>::infinity();
+            for (size_t h = 0; h < height; h++) {
+                max_val = std::max(max_val, (*this)(0, h, w));
+            }
+
+            // compute exp(x - max) and sum
+            float sum = 0.0f;
+            for (size_t h = 0; h < height; h++) {
+                result(0, h, w) = std::exp((*this)(0, h, w) - max_val);
+                sum += result(0, h, w);
+            }
+
+            // normalise
+            for (size_t h = 0; h < height; h++) {
+                result(0, h, w) /= sum;
+            }
         }
-
-        // compute exp and sum across height
-        float sum = 0.0f;
+    } else {  // softmax across width dimension
+        // for each row
         for (size_t h = 0; h < height; h++) {
-            result(d, h, 0) = std::exp((*this)(d, h, 0) - max_val);
-            sum += result(d, h, 0);
-        }
+            // find max value in this row
+            float max_val = -std::numeric_limits<float>::infinity();
+            for (size_t w = 0; w < width; w++) {
+                max_val = std::max(max_val, (*this)(0, h, w));
+            }
 
-        // normalize across height
-        for (size_t h = 0; h < height; h++) {
-            result(d, h, 0) /= sum;
+            // compute exp(x - max) and sum
+            float sum = 0.0f;
+            for (size_t w = 0; w < width; w++) {
+                result(0, h, w) = std::exp((*this)(0, h, w) - max_val);
+                sum += result(0, h, w);
+            }
+
+            // normalise
+            for (size_t w = 0; w < width; w++) {
+                result(0, h, w) /= sum;
+            }
         }
     }
+
     result.check_for_nans("softmax");
     return result;
 }
 
-Tensor3D Tensor3D::flatten() const {
+Tensor3d Tensor3d::flatten() const {
     // create tensor of shape (1, depth*height*width, 1)
-    Tensor3D result(1, depth * height * width, 1);
+    Tensor3d result(1, depth * height * width, 1);
 
     // copy values sequentially
     size_t idx = 0;
@@ -347,7 +378,7 @@ Tensor3D Tensor3D::flatten() const {
     return result;
 }
 
-Tensor3D Tensor3D::unflatten(size_t new_depth, size_t new_height, size_t new_width) const {
+Tensor3d Tensor3d::unflatten(size_t new_depth, size_t new_height, size_t new_width) const {
     // check if dimensions match
     if (depth != 1 or width != 1 or height != new_depth * new_height * new_width) {
         throw std::runtime_error("cannot unflatten tensor - dimensions don't match. Expected flattened tensor of height " +
@@ -355,7 +386,7 @@ Tensor3D Tensor3D::unflatten(size_t new_depth, size_t new_height, size_t new_wid
                                     std::to_string(height));
     }
 
-    Tensor3D result(new_depth, new_height, new_width);
+    Tensor3d result(new_depth, new_height, new_width);
     size_t idx = 0;
 
     // copy values back to 3D structure
@@ -372,14 +403,14 @@ Tensor3D Tensor3D::unflatten(size_t new_depth, size_t new_height, size_t new_wid
     return result;
 }
 
-Tensor3D Tensor3D::Conv(const Tensor3D &input, const Tensor3D &kernel) {
+Tensor3d Tensor3d::Conv(const Tensor3d &input, const Tensor3d &kernel) {
     // check dimensions
     if (input.depth != kernel.depth) {
         throw std::runtime_error("input and kernel must have same depth for convolution");
     }
 
     // perform full convolution (no padding)
-    Tensor3D output(1, input.height - kernel.height + 1, input.width - kernel.width + 1);
+    Tensor3d output(1, input.height - kernel.height + 1, input.width - kernel.width + 1);
 
     // for each position in the output
     for (int y = 0; y < output.height; ++y) {
@@ -401,8 +432,8 @@ Tensor3D Tensor3D::Conv(const Tensor3D &input, const Tensor3D &kernel) {
     return output;
 }
 
-Tensor3D Tensor3D::rotate_180() const {
-    Tensor3D result(depth, height, width);
+Tensor3d Tensor3d::rotate_180() const {
+    Tensor3d result(depth, height, width);
     for (size_t d = 0; d < depth; d++) {
         for (size_t h = 0; h < height; h++) {
             for (size_t w = 0; w < width; w++) {
@@ -414,7 +445,32 @@ Tensor3D Tensor3D::rotate_180() const {
     return result;
 }
 
-void Tensor3D::set_depth_slice(size_t depth_index, const Tensor3D &slice) {
+// returns a diagonal matrix from a vector
+Tensor3d Tensor3d::diag() const {
+    // check if matrix is of form 1xnx1 or 1x1xn
+    if (depth != 1 or (height != 1 and width != 1)) {
+        throw std::runtime_error("matrix is not of form 1xnx1 or 1x1xn for diag");
+    }
+
+    // if height == 1, then the matrix is of form 1xnx1
+    // if width == 1, then the matrix is of form 1x1xn
+
+    if (height == 1) {
+        Tensor3d result(1, width, width);
+        for (size_t i = 0; i < width; i++) {
+            result(0, i, i) = (*this)(0, 0, i);
+        }
+        return result;
+    } else {
+        Tensor3d result(1, height, height);
+        for (size_t i = 0; i < height; i++) {
+            result(0, i, i) = (*this)(0, i, 0);
+        }
+        return result;
+    }
+}
+
+void Tensor3d::set_depth_slice(size_t depth_index, const Tensor3d &slice) {
     if (depth_index >= depth) {
         throw std::runtime_error("depth_index out of range in set_depth_slice");
     }
@@ -426,8 +482,8 @@ void Tensor3D::set_depth_slice(size_t depth_index, const Tensor3D &slice) {
     std::copy(slice.data.begin(), slice.data.begin() + height * width, data.begin() + depth_index * height * width);
 }
 
-std::ostream &operator<<(std::ostream &os, const Tensor3D &tensor) {
-    os << "Tensor3D(" << tensor.depth << ", " << tensor.height << ", " << tensor.width << ")\n";
+std::ostream &operator<<(std::ostream &os, const Tensor3d &tensor) {
+    os << "Tensor3d(" << tensor.depth << ", " << tensor.height << ", " << tensor.width << ")\n";
 
     for (size_t d = 0; d < tensor.depth; ++d) {
         os << "Depth " << d << ":\n";
@@ -444,8 +500,8 @@ std::ostream &operator<<(std::ostream &os, const Tensor3D &tensor) {
     return os;
 }
 
-// helper functions for saving/loading Tensor3D
-void Tensor3D::save_to_file(std::ofstream &file) const {
+// helper functions for saving/loading Tensor3d
+void Tensor3d::save_to_file(std::ofstream &file) const {
     // write dimensions
     uint32_t depth_val = static_cast<uint32_t>(depth);
     uint32_t height_val = static_cast<uint32_t>(height); 
@@ -459,7 +515,7 @@ void Tensor3D::save_to_file(std::ofstream &file) const {
     file.write(reinterpret_cast<const char *>(data.data()), data.size() * sizeof(float));
 }
 
-void Tensor3D::load_from_file(std::ifstream &file) {
+void Tensor3d::load_from_file(std::ifstream &file) {
     // read dimensions
     uint32_t depth_val, height_val, width_val;
     file.read(reinterpret_cast<char *>(&depth_val), sizeof(depth_val));
@@ -478,7 +534,7 @@ void Tensor3D::load_from_file(std::ifstream &file) {
 }
 
 
-std::pair<float, float> Tensor3D::get_magnitudes() const {
+std::pair<float, float> Tensor3d::get_magnitudes() const {
     float max_val = 0.0f;
     float sum = 0.0f;
     int count = data.size();
@@ -492,14 +548,15 @@ std::pair<float, float> Tensor3D::get_magnitudes() const {
     return {max_val, sum / count};
 }
 
+
 //debug 
-void Tensor3D::check_for_nans(const std::string& operation) const {
+void Tensor3d::check_for_nans(const std::string& operation) const {
     for (const auto& val : data) {
         if (std::isnan(val) || std::isinf(val)) {
             if (std::isnan(val)) {
-                std::cerr << "NaN detected in Tensor3D during: " << operation << "\n";
+                std::cerr << "NaN detected in Tensor3d during: " << operation << "\n";
             } else {
-                std::cerr << "Inf detected in Tensor3D during: " << operation << "\n";
+                std::cerr << "Inf detected in Tensor3d during: " << operation << "\n";
             }
             
             // get backtrace

@@ -1,15 +1,15 @@
 #include "../include/tokeniser.hpp"
-#include "../include/tensor3d.hpp"
+#include "../include/Tensor3d.hpp"
 
 Tokeniser::Tokeniser(const std::string& glove_path) {
     loadGloveEmbeddings(glove_path);
 }
 
-std::vector<Tensor3D> Tokeniser::string_to_embeddings(const std::string& text) {
+std::vector<Tensor3d> Tokeniser::string_to_embeddings(const std::string& text) {
     std::vector<std::string> tokens = tokenise(text);
-    std::vector<Tensor3D> embeddings;
+    std::vector<Tensor3d> embeddings;
     for (const std::string& token : tokens) {
-        embeddings.push_back(Tensor3D(1, embedding_dim, 1, getEmbedding(token)));
+        embeddings.push_back(Tensor3d(1, embedding_dim, 1, getEmbedding(token)));
     }
     return embeddings;
 }
