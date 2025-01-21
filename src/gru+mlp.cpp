@@ -1627,6 +1627,7 @@ class Predictor {
 
     size_t input_size;
     size_t hidden_size;
+    size_t attention_size;
     size_t output_size;
 
     std::unique_ptr<GRUOptimiser> gru_optimiser;
@@ -1635,13 +1636,14 @@ class Predictor {
     std::unique_ptr<Loss> loss;
 
    public:
-    Predictor(size_t input_size, size_t hidden_size, size_t output_size, size_t attention_size, std::vector<int> mlp_topology,
+    Predictor(size_t input_size, size_t hidden_size, size_t attention_size, size_t output_size, std::vector<int> mlp_topology,
               std::vector<std::string> mlp_activation_functions = {})
         : gru(input_size, hidden_size),
           attention(hidden_size, attention_size),
           mlp(mlp_topology, mlp_activation_functions),
           input_size(input_size),
           hidden_size(hidden_size),
+          attention_size(attention_size),
           output_size(output_size) {}
 
     // set optimiser - call before training
@@ -1908,8 +1910,8 @@ class Predictor {
             }
 
             std::cout << "\rEpoch " << epoch + 1 << "/" << epochs << " complete    " << std::endl;
-            std::string model_path = "model_" + std::to_string(epoch) + ".bin";
-            // save_model(model_path);
+            std::string model_path = "../models/model_" + std::to_string(epoch) + ".bin";
+            save_model(model_path);
 
             // evaluate on test set
             float total_accuracy = 0.0f;
@@ -2028,95 +2030,105 @@ class Predictor {
     }
 
     // fixme do not save attention layer
-    // void save_model(const std::string& filepath) const {
-    //     std::ofstream file(filepath, std::ios::binary);
-    //     if (!file.is_open()) {
-    //         throw std::runtime_error("could not open file for saving: " + filepath);
-    //     }
+    void save_model(const std::string& filepath) const {
+        std::ofstream file(filepath, std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("could not open file for saving: " + filepath);
+        }
 
-    //     // save model architecture parameters
-    //     file.write(reinterpret_cast<const char*>(&input_size), sizeof(input_size));
-    //     file.write(reinterpret_cast<const char*>(&hidden_size), sizeof(hidden_size));
-    //     file.write(reinterpret_cast<const char*>(&output_size), sizeof(output_size));
+        // save model architecture parameters
+        file.write(reinterpret_cast<const char*>(&input_size), sizeof(input_size));
+        file.write(reinterpret_cast<const char*>(&hidden_size), sizeof(hidden_size));
+        file.write(reinterpret_cast<const char*>(&attention_size), sizeof(attention_size));
+        file.write(reinterpret_cast<const char*>(&output_size), sizeof(output_size));
 
-    //     // save GRU parameters
-    //     gru.W_z.save_to_file(file);
-    //     gru.U_z.save_to_file(file);
-    //     gru.b_z.save_to_file(file);
-    //     gru.W_r.save_to_file(file);
-    //     gru.U_r.save_to_file(file);
-    //     gru.b_r.save_to_file(file);
-    //     gru.W_h.save_to_file(file);
-    //     gru.U_h.save_to_file(file);
-    //     gru.b_h.save_to_file(file);
+        // save GRU parameters
+        gru.W_z.save_to_file(file);
+        gru.U_z.save_to_file(file);
+        gru.b_z.save_to_file(file);
+        gru.W_r.save_to_file(file);
+        gru.U_r.save_to_file(file);
+        gru.b_r.save_to_file(file);
+        gru.W_h.save_to_file(file);
+        gru.U_h.save_to_file(file);
+        gru.b_h.save_to_file(file);
 
-    //     // save number of MLP layers
-    //     size_t num_layers = mlp.layers.size();
-    //     file.write(reinterpret_cast<const char*>(&num_layers), sizeof(num_layers));
+        // save attention parameters
+        attention.weights.save_to_file(file);
+        attention.scoring_vector.save_to_file(file);
 
-    //     // save MLP parameters
-    //     for (const auto& layer : mlp.layers) {
-    //         // save layer dimensions and parameters
-    //         layer.weights.save_to_file(file);
-    //         layer.bias.save_to_file(file);
+        // save number of MLP layers
+        size_t num_layers = mlp.layers.size();
+        file.write(reinterpret_cast<const char*>(&num_layers), sizeof(num_layers));
 
-    //         // save activation function name
-    //         size_t name_length = layer.activation_function.length();
-    //         file.write(reinterpret_cast<const char*>(&name_length), sizeof(name_length));
-    //         file.write(layer.activation_function.c_str(), name_length);
-    //     }
-    // }
+        // save MLP parameters
+        for (const auto& layer : mlp.layers) {
+            // save layer dimensions and parameters
+            layer.weights.save_to_file(file);
+            layer.bias.save_to_file(file);
 
-    // static Predictor load_model(const std::string& filepath) {
-    //     std::ifstream file(filepath, std::ios::binary);
-    //     if (!file.is_open()) {
-    //         throw std::runtime_error("could not open file for loading: " + filepath);
-    //     }
+            // save activation function name
+            size_t name_length = layer.activation_function.length();
+            file.write(reinterpret_cast<const char*>(&name_length), sizeof(name_length));
+            file.write(layer.activation_function.c_str(), name_length);
+        }
+    }
 
-    //     // load model architecture parameters
-    //     size_t input_size, hidden_size, output_size;
-    //     file.read(reinterpret_cast<char*>(&input_size), sizeof(input_size));
-    //     file.read(reinterpret_cast<char*>(&hidden_size), sizeof(hidden_size));
-    //     file.read(reinterpret_cast<char*>(&output_size), sizeof(output_size));
+    static Predictor load_model(const std::string& filepath) {
+        std::ifstream file(filepath, std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("could not open file for loading: " + filepath);
+        }
 
-    //     // create predictor with loaded dimensions
-    //     std::vector<int> mlp_topology = {static_cast<int>(hidden_size)};  // will be populated fully later
-    //     Predictor predictor(input_size, hidden_size, output_size, mlp_topology);
+        // load model architecture parameters
+        size_t input_size, hidden_size, output_size, attention_size;
+        file.read(reinterpret_cast<char*>(&input_size), sizeof(input_size));
+        file.read(reinterpret_cast<char*>(&hidden_size), sizeof(hidden_size));
+        file.read(reinterpret_cast<char*>(&attention_size), sizeof(attention_size));
+        file.read(reinterpret_cast<char*>(&output_size), sizeof(output_size));
 
-    //     // load GRU parameters
-    //     predictor.gru.W_z.load_from_file(file);
-    //     predictor.gru.U_z.load_from_file(file);
-    //     predictor.gru.b_z.load_from_file(file);
-    //     predictor.gru.W_r.load_from_file(file);
-    //     predictor.gru.U_r.load_from_file(file);
-    //     predictor.gru.b_r.load_from_file(file);
-    //     predictor.gru.W_h.load_from_file(file);
-    //     predictor.gru.U_h.load_from_file(file);
-    //     predictor.gru.b_h.load_from_file(file);
+        // create predictor with loaded dimensions
+        std::vector<int> mlp_topology = {static_cast<int>(hidden_size)};  // will be cleared and populated later just necessary to initialise MLP 
+        Predictor predictor(input_size, hidden_size, attention_size, output_size, mlp_topology);  
 
-    //     // load number of MLP layers
-    //     size_t num_layers;
-    //     file.read(reinterpret_cast<char*>(&num_layers), sizeof(num_layers));
+        // load GRU parameters
+        predictor.gru.W_z.load_from_file(file);
+        predictor.gru.U_z.load_from_file(file);
+        predictor.gru.b_z.load_from_file(file);
+        predictor.gru.W_r.load_from_file(file);
+        predictor.gru.U_r.load_from_file(file);
+        predictor.gru.b_r.load_from_file(file);
+        predictor.gru.W_h.load_from_file(file);
+        predictor.gru.U_h.load_from_file(file);
+        predictor.gru.b_h.load_from_file(file);
 
-    //     // clear existing layers and load new ones
-    //     predictor.mlp.layers.clear();
+        // load attention parameters
+        predictor.attention.weights.load_from_file(file);
+        predictor.attention.scoring_vector.load_from_file(file);
 
-    //     // load MLP parameters
-    //     for (size_t i = 0; i < num_layers; ++i) {
-    //         Layer layer(1, 1);  // temporary dimensions, will be overwritten
-    //         layer.weights.load_from_file(file);
-    //         layer.bias.load_from_file(file);
+        // load number of MLP layers
+        size_t num_layers;
+        file.read(reinterpret_cast<char*>(&num_layers), sizeof(num_layers));
 
-    //         // load activation function name
-    //         size_t name_length;
-    //         file.read(reinterpret_cast<char*>(&name_length), sizeof(name_length));
-    //         std::vector<char> name_buffer(name_length);
-    //         file.read(name_buffer.data(), name_length);
-    //         layer.activation_function = std::string(name_buffer.data(), name_length);
+        // clear existing layers and load new ones
+        predictor.mlp.layers.clear();
 
-    //         predictor.mlp.layers.push_back(layer);
-    //     }
-    // }
+        // load MLP parameters
+        for (size_t i = 0; i < num_layers; ++i) {
+            Layer layer(1, 1);  // temporary dimensions, will be overwritten
+            layer.weights.load_from_file(file);
+            layer.bias.load_from_file(file);
+
+            // load activation function name
+            size_t name_length;
+            file.read(reinterpret_cast<char*>(&name_length), sizeof(name_length));
+            std::vector<char> name_buffer(name_length);
+            file.read(name_buffer.data(), name_length);
+            layer.activation_function = std::string(name_buffer.data(), name_length);
+
+            predictor.mlp.layers.push_back(layer);
+        }
+    }
 };
 
 // reads csv file for columns headed 'review' and 'sentiment', tokenises, then returns training examples.
@@ -2222,7 +2234,7 @@ int main() {
     const std::vector<int> mlp_topology = {static_cast<int>(hidden_size), 64, 32, static_cast<int>(output_size)};
     const std::vector<std::string> mlp_activation_functions = {"relu", "relu", "softmax"};
 
-    Predictor predictor(input_features, hidden_size, output_size, attention_size, mlp_topology, mlp_activation_functions);
+    Predictor predictor(input_features, hidden_size, attention_size, output_size, mlp_topology, mlp_activation_functions);
     predictor.set_gru_optimiser(std::make_unique<GRUAdamWOptimiser>(0.001, 0.9, 0.999, 1e-6, 0.003, 1.0));
     predictor.set_attention_optimiser(std::make_unique<AttentionAdamWOptimiser>(0.001, 0.9, 0.999, 1e-6, 0.003, 1.0));
     predictor.set_mlp_optimiser(std::make_unique<MLPAdamWOptimiser>(0.001, 0.9, 0.999, 1e-6, 0.003, 1.0));
