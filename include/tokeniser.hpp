@@ -22,6 +22,8 @@ class Tokeniser {
         // tokenise text and convert to embeddings
         std::vector<Tensor3d> string_to_embeddings(const std::string& text);
 
+        std::string clean_text(const std::string& text);
+
         // simple word tokenisation
         std::vector<std::string> tokenise(const std::string& text);
 

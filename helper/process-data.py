@@ -10,15 +10,12 @@ def clean_text(text):
     
     # ensure text is string
     text = str(text)
-    
-    # convert to lowercase
-    text = text.lower()
-    
+        
     # remove html tags (fixed regex)
     text = re.sub(r'<.*?>', '', text)
     
-    # remove special characters but keep apostrophes
-    text = re.sub(r'[^a-z\'\s]', ' ', text)
+    # remove special characters but keep apostrophes and full stops
+    text = re.sub(r"[^a-zA-Z!?='.\s]", ' ', text)
     
     # remove extra whitespace
     text = re.sub(r'\s+', ' ', text).strip()

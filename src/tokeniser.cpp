@@ -14,15 +14,40 @@ std::vector<Tensor3d> Tokeniser::string_to_embeddings(const std::string& text) {
     return embeddings;
 }
 
+// clean input text
+std::string Tokeniser::clean_text(const std::string& text) {
+    std::string cleaned_text;
+    bool space = false;
+    for (char c : text) {
+        if (std::isspace(c)) {
+            // remove multiple spaces
+            if (!space) {
+                cleaned_text += ' ';
+                space = true;
+            }
+        } else if (std::isalnum(c) or c == '.' or c == '!' or c == '?' or c == '\'') {
+            // keep alphanumeric characters, punctuation, and apostrophes
+            cleaned_text += c;
+            space = false;
+        }
+    }
+    // remove trailing space if present
+    if (!cleaned_text.empty() && cleaned_text.back() == ' ') {
+        cleaned_text.pop_back();
+    }
+    return cleaned_text;
+}
+
 // simple word tokenisation
 std::vector<std::string> Tokeniser::tokenise(const std::string& text) {
+    std::string cleaned_text = clean_text(text);  // clean the text before tokenising
     std::vector<std::string> tokens;
     std::string word;
-    
-    // convert to lowercase and split on spaces/punctuation
-    for (char c : text) {
+
+    // split on spaces/punctuation
+    for (char c : cleaned_text) {
         if (std::isalnum(c)) {
-            word += std::tolower(c);
+            word += c;
         } else if (!word.empty()) {
             tokens.push_back(word);
             word.clear();

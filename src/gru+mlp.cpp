@@ -2128,6 +2128,8 @@ class Predictor {
 
             predictor.mlp.layers.push_back(layer);
         }
+
+        return predictor;
     }
 };
 
