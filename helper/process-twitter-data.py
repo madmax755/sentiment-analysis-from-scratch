@@ -1,7 +1,6 @@
 import pandas as pd # type: ignore
 import re
 
-df = pd.read_csv("data/imdb_raw.csv")
 
 def clean_text(text):
     # handle NaN/None values
@@ -30,14 +29,19 @@ def clean_sentiment(sentiment):
     else:
         return None
 
+df = pd.read_csv("data/twitter_raw.csv")
+
 # clean data
-df["review"] = df["review"].apply(clean_text)
+df["text"] = df["text"].apply(clean_text)
 df["sentiment"] = df["sentiment"].apply(clean_sentiment)
+df.dropna(inplace=True)
+
+df = df[["text", "sentiment"]]
 
 # split into training and test data
 train_df = df.sample(frac=0.9, random_state=42)
 test_df = df.drop(train_df.index)
 
 # save to csv
-train_df.to_csv("data/imdb_clean_train.csv")
-test_df.to_csv("data/imdb_clean_test.csv")
+train_df.to_csv("data/twitter_clean_train.csv")
+test_df.to_csv("data/twitter_clean_test.csv")

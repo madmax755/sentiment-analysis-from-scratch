@@ -1,6 +1,8 @@
 #include "../include/tokeniser.hpp"
 #include "../include/Tensor3d.hpp"
 
+Tokeniser::Tokeniser() {}
+
 Tokeniser::Tokeniser(const std::string& glove_path) {
     loadGloveEmbeddings(glove_path);
 }

@@ -5,6 +5,8 @@
 #include <cxxabi.h>    // for demangling C++ names
 #include <dlfcn.h>   // for dladdr
 #include <cxxabi.h>  // for demangling
+#include <stdio.h>
+#include <assert.h>
 
 
 Tensor3d::Tensor3d() : height(0), width(0), depth(0) {}
@@ -64,12 +66,18 @@ const float &Tensor3d::operator()(size_t d, size_t h, size_t w) const {
 
 // extract 2D slice at given depth
 Tensor3d Tensor3d::operator()(size_t d) {
+    if (d >= depth) {
+        throw std::runtime_error("index out of range in Tensor3d::operator()");
+    }
     size_t slice_size = width * height;
     std::vector<float> new_data(data.begin() + d * slice_size, data.begin() + d * slice_size + slice_size);
     return Tensor3d(1, height, width, new_data);
 }
 
 const Tensor3d Tensor3d::operator()(size_t d) const {
+    if (d >= depth) {
+        throw std::runtime_error("index out of range in Tensor3d::operator()");
+    }
     size_t slice_size = width * height;
     std::vector<float> new_data(data.begin() + d * slice_size, data.begin() + d * slice_size + slice_size);
     return Tensor3d(1, height, width, new_data);
@@ -78,14 +86,10 @@ const Tensor3d Tensor3d::operator()(size_t d) const {
 // extract column at given columnindex
 Tensor3d Tensor3d::col(int index) const {
     // convert negative index to positive
-    if (index < 0) {
-        index = width + index;
-    }
+    if (index < 0) {index = width + index;}
 
     // check if index is within range
-    if (index < 0 || index >= width) {
-        throw std::runtime_error("index out of range in Tensor3d::col");
-    }
+    if (index < 0 || index >= width) {throw std::runtime_error("index out of range in Tensor3d::col");}
 
     Tensor3d result(1, height, 1);
 
@@ -102,6 +106,10 @@ const std::vector<float>& Tensor3d::get_flat_data() const { return data; }
 
 // compute dot product with a kernel centered at specific position - the argument must be the kernel
 float Tensor3d::dot_with_kernel_at_position(const Tensor3d &kernel, size_t start_x, size_t start_y) const {
+    if (kernel.depth != depth) {
+        throw std::runtime_error("kernel depth must match input tensor depth");
+    }
+
     float sum = 0.0;
 
     // to facilitate start_x and start_y being the centre position

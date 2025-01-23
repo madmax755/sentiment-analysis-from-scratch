@@ -372,6 +372,8 @@ class GRUCell {
     }
 
    public:
+    size_t input_size;
+    size_t hidden_size;
     // gate weights and biases
     Tensor3d W_z;  // update gate weights for input
     Tensor3d U_z;  // update gate weights for hidden state
@@ -385,8 +387,7 @@ class GRUCell {
     Tensor3d U_h;  // candidate hidden state weights for hidden state
     Tensor3d b_h;  // candidate hidden state bias
 
-    size_t input_size;
-    size_t hidden_size;
+    
 
     GRUCell(size_t input_size, size_t hidden_size)
         : input_size(input_size),
@@ -1428,7 +1429,7 @@ class BatchDataLoader {
     Tokeniser& tokeniser;
     std::ifstream file;
     std::string header;
-    int review_idx;
+    int text_idx;
     int sentiment_idx;
 
     // store the byte offset of each line in the file
@@ -1471,21 +1472,21 @@ class BatchDataLoader {
         std::getline(file, header);
         std::stringstream header_stream(header);
         std::string field;
-        review_idx = -1;
+        text_idx = -1;
         sentiment_idx = -1;
         int col_idx = 0;
 
         while (std::getline(header_stream, field, ',')) {
-            if (field == "review") {
-                review_idx = col_idx;
+            if (field == "text") {
+                text_idx = col_idx;
             } else if (field == "sentiment") {
                 sentiment_idx = col_idx;
             }
             col_idx++;
         }
 
-        if (review_idx == -1 || sentiment_idx == -1) {
-            throw std::runtime_error("could not find required columns 'review' and 'sentiment' in csv header");
+        if (text_idx == -1 || sentiment_idx == -1) {
+            throw std::runtime_error("could not find required columns 'text' and 'sentiment' in csv header");
         }
 
         // initialise line positions and indices
@@ -1517,13 +1518,13 @@ class BatchDataLoader {
 
             std::stringstream row_stream(line);
             std::string cell;
-            std::string review;
+            std::string text;
             float sentiment;
             int current_col = 0;
 
             while (std::getline(row_stream, cell, ',')) {
-                if (current_col == review_idx) {
-                    review = cell;
+                if (current_col == text_idx) {
+                    text = cell;
                 } else if (current_col == sentiment_idx) {
                     try {
                         sentiment = std::stof(cell);
@@ -1534,7 +1535,7 @@ class BatchDataLoader {
                 current_col++;
             }
 
-            if (!review.empty()) {
+            if (!text.empty()) {
                 Tensor3d target;
                 if (sentiment == 1) {
                     target = Tensor3d(1, 2, 1, std::vector<float>{1, 0});
@@ -1542,7 +1543,7 @@ class BatchDataLoader {
                     target = Tensor3d(1, 2, 1, std::vector<float>{0, 1});
                 }
 
-                std::vector<Tensor3d> sequence = tokeniser.string_to_embeddings(review);
+                std::vector<Tensor3d> sequence = tokeniser.string_to_embeddings(text);
                 batch.push_back({sequence, target});
             }
         }
@@ -2029,7 +2030,6 @@ class Predictor {
         return metrics;
     }
 
-    // fixme do not save attention layer
     void save_model(const std::string& filepath) const {
         std::ofstream file(filepath, std::ios::binary);
         if (!file.is_open()) {
@@ -2133,89 +2133,6 @@ class Predictor {
     }
 };
 
-// reads csv file for columns headed 'review' and 'sentiment', tokenises, then returns training examples.
-std::vector<TrainingExample> training_examples_from_csv(const std::string& filename, Tokeniser& tokeniser,
-                                                        size_t no_examples = std::numeric_limits<size_t>::max()) {
-    std::ifstream file(filename);
-
-    if (!file.is_open()) {
-        throw std::runtime_error("could not open file: " + filename);
-    }
-
-    // read header
-    std::string line;
-    std::getline(file, line);
-
-    // find indices of review and sentiment columns in header
-    std::stringstream header_stream(line);
-    std::string field;
-    int review_idx = -1;
-    int sentiment_idx = -1;
-    int col_idx = 0;
-
-    // split header on commas and find required columns
-    while (std::getline(header_stream, field, ',')) {
-        if (field == "review") {
-            review_idx = col_idx;
-        } else if (field == "sentiment") {
-            sentiment_idx = col_idx;
-        }
-        col_idx++;
-    }
-
-    // check if required columns are present
-    if (review_idx == -1 || sentiment_idx == -1) {
-        throw std::runtime_error("could not find required columns 'review' and 'sentiment' in csv header");
-    }
-
-    std::vector<TrainingExample> examples;
-    size_t count = 0;
-
-    // read data rows up to no_examples
-    while (std::getline(file, line) && count < no_examples) {
-        std::stringstream row_stream(line);
-        std::string cell;
-        std::string review;
-        float sentiment;
-        int current_col = 0;
-
-        // go through cells storing review and sentiment based on column indices
-        while (std::getline(row_stream, cell, ',')) {
-            if (current_col == review_idx) {
-                review = cell;
-            } else if (current_col == sentiment_idx) {
-                try {
-                    // try to convert to float
-                    sentiment = std::stof(cell);
-                } catch (const std::exception& e) {
-                    throw std::runtime_error("could not convert sentiment to float: " + cell);
-                }
-            }
-            current_col++;
-        }
-
-        // store valid examples
-        if (!review.empty()) {
-            // create target tensor
-            Tensor3d target;
-            if (sentiment == 1) {
-                target = Tensor3d(1, 2, 1, std::vector<float>{1, 0});
-            } else {
-                target = Tensor3d(1, 2, 1, std::vector<float>{0, 1});
-            }
-
-            // tokenise review and create sequence tensor
-            std::vector<Tensor3d> sequence = tokeniser.string_to_embeddings(review);
-
-            // create training example
-            TrainingExample example = {sequence, target};
-            examples.push_back(example);
-            count++;
-        }
-    }
-
-    return examples;
-}
 
 int main() {
     // load embeddings and training data
@@ -2226,8 +2143,8 @@ int main() {
     const size_t epochs = 50;
 
     // load training and test data
-    BatchDataLoader training_loader("../data/imdb_clean_train.csv", tokeniser, batch_size);
-    BatchDataLoader test_loader("../data/imdb_clean_test.csv", tokeniser, 200);
+    BatchDataLoader training_loader("../data/combined_train.csv", tokeniser, batch_size);
+    BatchDataLoader test_loader("../data/combined_test.csv", tokeniser, 200);
 
     const int input_features = 100;
     const size_t hidden_size = 128;

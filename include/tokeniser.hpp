@@ -17,6 +17,7 @@ class Tokeniser {
         std::vector<float> unk_embedding;
 
     public:
+        Tokeniser();
         Tokeniser(const std::string& glove_path);
 
         // tokenise text and convert to embeddings
