@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -g3 -O3 -fno-omit-frame-pointer -rdynamic -I./include -std=c++20
+CXXFLAGS = -g -O3 -I./include -std=c++20
 SRC_DIR = src
 OBJ_DIR = obj
 BIN_DIR = bin
