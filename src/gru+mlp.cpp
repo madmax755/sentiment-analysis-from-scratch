@@ -1993,21 +1993,44 @@ class Predictor {
 
                 batch_count++;
 
-                if (batch_count % 10 == 0) {
-                    std::cout << "\rBatch " << batch_count << "/" << full_batches << " complete";
+                
+                if (batch_count % 100 == 0) {
+                 std::cout << "\rBatch " << batch_count << "/" << full_batches << " complete";
+
                     // evaluate on test set
                     float total_accuracy = 0.0f;
                     int test_batches = 0;
                     test_loader.reset();  // reset test loader to beginning
+        
+                    while (true) {
+                        auto test_batch = test_loader.next_batch();
+                        if (test_batch.empty()) break;
+        
+                        auto metrics = evaluate(test_batch);
+                        total_accuracy += metrics.accuracy;
+                        test_batches++;
+                    }
+        
+                    float avg_accuracy = total_accuracy / test_batches;
+                    std::cout << " - full test accuracy: " << avg_accuracy * 100.0f << "%\n" << std::endl;
 
-                    auto test_batch = test_loader.next_batch(200);
-                    auto metrics = evaluate(test_batch);
-                    std::cout << " - rough test accuracy: " << metrics.accuracy * 100.0f << "%";
-
-                    // get weight magnitudes
-                    auto magnitudes = get_weight_magnitudes();
-                    std::cout << " - " << magnitudes << std::endl;
-
+                    
+                } else if (batch_count % 10 == 0) {
+                                    std::cout << "\rBatch " << batch_count << "/" << full_batches << " complete";
+                                    // evaluate on test set
+                                    float total_accuracy = 0.0f;
+                                    int test_batches = 0;
+                                    test_loader.reset();  // reset test loader to beginning
+                
+                                    auto test_batch = test_loader.next_batch(200);
+                                    auto metrics = evaluate(test_batch);
+                                    std::cout << " - rough test accuracy: " << metrics.accuracy * 100.0f << "%";
+                
+                                    // get weight magnitudes
+                                    auto magnitudes = get_weight_magnitudes();
+                                    std::cout << " - " << magnitudes << std::endl;
+                
+                    
                 } else {
                     std::cout << "\rBatch " << batch_count << "/" << full_batches + 1 << " complete";
                     // get weight magnitudes
@@ -2263,7 +2286,7 @@ int main() {
     const std::vector<std::string> mlp_activation_functions = {"relu", "relu", "softmax"};
 
     Predictor predictor(input_features, hidden_size, attention_size, output_size, mlp_topology, mlp_activation_functions);
-    
+
     const float initial_learning_rate = 0.001;
     const float beta1 = 0.9;
     const float beta2 = 0.999;
@@ -2281,6 +2304,7 @@ int main() {
     const float end_learning_rate = 0.00005;
     const int duration = 16000;
     predictor.set_learning_rate_scheduler(std::make_unique<LinearLRScheduler>(initial_learning_rate, end_learning_rate, duration));
+
     predictor.set_loss(std::make_unique<CrossEntropyLoss>());
 
     predictor.train_with_batches(training_loader, test_loader, epochs);
