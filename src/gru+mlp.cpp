@@ -726,6 +726,8 @@ class AttentionLayer {
 
 class MLPOptimiser {
    public:
+    float learning_rate;
+
     /**
      * @brief Computes and applies updates to the network layers based on gradients.
      * @param layers The layers of the neural network to update.
@@ -828,7 +830,6 @@ class MLPOptimiser {
 
 class MLPSGDOptimiser : public MLPOptimiser {
    private:
-    float learning_rate;
     std::vector<std::vector<Tensor3d>> velocity;
     float clip_norm;
 
@@ -837,7 +838,9 @@ class MLPSGDOptimiser : public MLPOptimiser {
      * @brief Constructs an MLPSGDOptimiser object with the specified learning rate.
      * @param lr The learning rate (default: 0.1f).
      */
-    MLPSGDOptimiser(float lr = 0.1f, float clip_norm = 1.0f) : learning_rate(lr), clip_norm(clip_norm) {}
+    MLPSGDOptimiser(float lr = 0.1f, float clip_norm = 1.0f) : clip_norm(clip_norm) {
+        learning_rate = lr;
+    }
 
     /**
      * @brief Initializes the velocity vectors for SGD optimization.
@@ -883,7 +886,6 @@ class MLPSGDOptimiser : public MLPOptimiser {
 
 class MLPSGDMomentumOptimiser : public MLPOptimiser {
    private:
-    float learning_rate;
     float momentum;
     std::vector<std::vector<Tensor3d>> velocity;
     float clip_norm;
@@ -895,7 +897,9 @@ class MLPSGDMomentumOptimiser : public MLPOptimiser {
      * @param mom The momentum coeficient (default: 0.9f).
      */
     MLPSGDMomentumOptimiser(float lr = 0.1f, float mom = 0.9f, float clip_norm = 1.0f)
-        : learning_rate(lr), momentum(mom), clip_norm(clip_norm) {}
+        : momentum(mom), clip_norm(clip_norm) {
+        learning_rate = lr;
+    }
 
     /**
      * @brief Initializes the velocity vectors for SGD with Momentum optimization.
@@ -942,7 +946,6 @@ class MLPSGDMomentumOptimiser : public MLPOptimiser {
 
 class MLPAdamOptimiser : public MLPOptimiser {
    private:
-    float learning_rate;
     float beta1;
     float beta2;
     float epsilon;
@@ -960,7 +963,9 @@ class MLPAdamOptimiser : public MLPOptimiser {
      * @param eps The epsilon parameter for numerical stability (default: 1e-8).
      */
     MLPAdamOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-6f, float clip_norm = 1.0f)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0), clip_norm(clip_norm) {}
+        : beta1(b1), beta2(b2), epsilon(eps), t(0), clip_norm(clip_norm) {
+        learning_rate = lr;
+    }
 
     /**
      * @brief Initializes the first and second moment vectors for Adam optimization.
@@ -1027,7 +1032,6 @@ class MLPAdamOptimiser : public MLPOptimiser {
 
 class MLPAdamWOptimiser : public MLPOptimiser {
    private:
-    float learning_rate;
     float beta1;
     float beta2;
     float epsilon;
@@ -1048,7 +1052,9 @@ class MLPAdamWOptimiser : public MLPOptimiser {
      */
     MLPAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-6f, float wd = 0.001f,
                       float clip_norm = 1.0f)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), clip_norm(clip_norm) {}
+        : beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), clip_norm(clip_norm) {
+        learning_rate = lr;
+    }
 
     /**
      * @brief Initializes the first and second moment vectors for AdamW optimization.
@@ -1119,6 +1125,7 @@ class MLPAdamWOptimiser : public MLPOptimiser {
 
 class GRUOptimiser {
    public:
+    float learning_rate;
     virtual void compute_and_apply_updates(GRUCell& gru, const GRUGradients& gradients) = 0;
     virtual ~GRUOptimiser() = default;
 
@@ -1138,11 +1145,12 @@ class GRUOptimiser {
 
 class GRUSGDOptimiser : public GRUOptimiser {
    private:
-    float learning_rate;
     float clip_norm;
 
    public:
-    GRUSGDOptimiser(float lr = 0.1f, float clip_norm = 1.0f) : learning_rate(lr), clip_norm(clip_norm) {}
+    GRUSGDOptimiser(float lr = 0.1f, float clip_norm = 1.0f) : clip_norm(clip_norm) {
+        learning_rate = lr;
+    }
 
     void compute_and_apply_updates(GRUCell& gru, const GRUGradients& grads) override {
         // clip grads
@@ -1165,14 +1173,15 @@ class GRUSGDOptimiser : public GRUOptimiser {
 
 class GRUSGDMomentumOptimiser : public GRUOptimiser {
    private:
-    float learning_rate;
     float momentum;
     GRUGradients velocity;
     float clip_norm;
 
    public:
     GRUSGDMomentumOptimiser(float lr = 0.1f, float mom = 0.9f, float clip_norm = 1.0f)
-        : learning_rate(lr), momentum(mom), velocity(0, 0), clip_norm(clip_norm) {}  // sizes will be set on first use
+        : momentum(mom), velocity(0, 0), clip_norm(clip_norm) {
+        learning_rate = lr;
+    }  // sizes will be set on first use
 
     void compute_and_apply_updates(GRUCell& gru, const GRUGradients& grads) override {
         // initialise velocity if needed
@@ -1213,7 +1222,6 @@ class GRUSGDMomentumOptimiser : public GRUOptimiser {
 
 class GRUAdamOptimiser : public GRUOptimiser {
    private:
-    float learning_rate;
     float beta1;
     float beta2;
     float epsilon;
@@ -1243,7 +1251,9 @@ class GRUAdamOptimiser : public GRUOptimiser {
 
    public:
     GRUAdamOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-6f, float clip_norm = 1.0f)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0), m(0, 0), v(0, 0), clip_norm(clip_norm) {}
+        : beta1(b1), beta2(b2), epsilon(eps), t(0), m(0, 0), v(0, 0), clip_norm(clip_norm) {
+        learning_rate = lr;
+    }
 
     void compute_and_apply_updates(GRUCell& gru, const GRUGradients& grads) override {
         if (m.dW_z.height == 0) {
@@ -1271,7 +1281,6 @@ class GRUAdamOptimiser : public GRUOptimiser {
 
 class GRUAdamWOptimiser : public GRUOptimiser {
    private:
-    float learning_rate;
     float beta1;
     float beta2;
     float epsilon;
@@ -1309,7 +1318,9 @@ class GRUAdamWOptimiser : public GRUOptimiser {
    public:
     GRUAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-6f, float wd = 0.001f,
                       float clip_norm = 1.0f)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), m(0, 0), v(0, 0), clip_norm(clip_norm) {}
+        : beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), m(0, 0), v(0, 0), clip_norm(clip_norm) {
+        learning_rate = lr;
+    }
 
     void compute_and_apply_updates(GRUCell& gru, const GRUGradients& grads) override {
         // initialise velocity/momentums if needed
@@ -1340,6 +1351,7 @@ class GRUAdamWOptimiser : public GRUOptimiser {
 
 class AttentionOptimiser {
    public:
+    float learning_rate;
     virtual void compute_and_apply_updates(AttentionLayer& attention, const AttentionGradients& gradients) = 0;
     virtual ~AttentionOptimiser() = default;
 
@@ -1358,7 +1370,6 @@ class AttentionOptimiser {
 
 class AttentionAdamWOptimiser : public AttentionOptimiser {
    private:
-    float learning_rate;
     float beta1;
     float beta2;
     float epsilon;
@@ -1396,7 +1407,9 @@ class AttentionAdamWOptimiser : public AttentionOptimiser {
    public:
     AttentionAdamWOptimiser(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-6f, float wd = 0.001f,
                             float clip_norm = 1.0f)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), m(0, 0), v(0, 0), clip_norm(clip_norm) {}
+        : beta1(b1), beta2(b2), epsilon(eps), weight_decay(wd), t(0), m(0, 0), v(0, 0), clip_norm(clip_norm) {
+        learning_rate = lr;
+    }
 
     void compute_and_apply_updates(AttentionLayer& attention, const AttentionGradients& gradients) override {
         // intialise m and v if needed
@@ -1417,6 +1430,86 @@ class AttentionAdamWOptimiser : public AttentionOptimiser {
 };
 
 // -----------------------------------------------------------------------------------------------------
+
+class LRScheduler {
+    public:
+    std::shared_ptr<GRUOptimiser> gru_optimiser;
+    std::shared_ptr<MLPOptimiser> mlp_optimiser;
+    std::shared_ptr<AttentionOptimiser> attention_optimiser;
+    float initial_learning_rate;
+    int iteration;
+
+    virtual float get_learning_rate_factor(int iteration) = 0;
+    virtual ~LRScheduler() = default;
+
+    LRScheduler(float initial_learning_rate) : initial_learning_rate(initial_learning_rate), iteration(0) {}
+
+    void set_optimisers(std::shared_ptr<GRUOptimiser> gru_optimiser, std::shared_ptr<MLPOptimiser> mlp_optimiser, std::shared_ptr<AttentionOptimiser> attention_optimiser) {
+        this->gru_optimiser = gru_optimiser;
+        this->mlp_optimiser = mlp_optimiser;
+        this->attention_optimiser = attention_optimiser;
+
+        // set initial learning rates of optimisers
+        this->gru_optimiser->learning_rate = initial_learning_rate;
+        this->mlp_optimiser->learning_rate = initial_learning_rate;
+        this->attention_optimiser->learning_rate = initial_learning_rate;
+    }
+
+    void step() {
+        float current_learning_rate = initial_learning_rate * get_learning_rate_factor(iteration);
+
+        // update learning rates
+        gru_optimiser->learning_rate = current_learning_rate;
+        mlp_optimiser->learning_rate = current_learning_rate;
+        attention_optimiser->learning_rate = current_learning_rate;
+
+        iteration++;
+    }
+
+};
+
+class LinearLRScheduler : public LRScheduler {
+    private:
+    float end_factor;
+    float duration;
+
+    public:
+    LinearLRScheduler(float initial_learning_rate, float end_factor, float duration) : LRScheduler(initial_learning_rate), end_factor(end_factor), duration(duration) {
+    }
+  
+    float get_learning_rate_factor(int iteration) override {
+        // linearly interpolate between start and end factor if iteration < duration
+        return (iteration < duration) ? (end_factor*iteration/duration + 1*(1-iteration/duration)) : end_factor;
+    }
+};
+
+class ExponentialLRScheduler : public LRScheduler {
+    private:
+    float gamma;
+
+    public:
+    ExponentialLRScheduler(float initial_learning_rate, float gamma) : LRScheduler(initial_learning_rate), gamma(gamma) {}
+
+    float get_learning_rate_factor(int iteration) override {
+        // exponential decay
+        return std::pow(gamma, iteration);
+    }
+};
+
+class MilestoneLRScheduler : public LRScheduler {
+    private:
+    std::vector<std::pair<int, float>> milestones;
+
+    public:
+    MilestoneLRScheduler(float initial_learning_rate, const std::vector<std::pair<int, float>>& milestones) : LRScheduler(initial_learning_rate), milestones(milestones) {}
+
+    float get_learning_rate_factor(int iteration) override {
+        // find the first milestone that is greater than the iteration
+        auto it = std::find_if(milestones.begin(), milestones.end(), [iteration](std::pair<int, float> m) { return m.first > iteration; });
+        int index = std::distance(milestones.begin(), it);
+        return milestones[index].second;
+    }
+};
 
 // load only batches of examples from csv file at a time - avoids lack of memory issues
 class BatchDataLoader {
@@ -1631,10 +1724,11 @@ class Predictor {
     size_t attention_size;
     size_t output_size;
 
-    std::unique_ptr<GRUOptimiser> gru_optimiser;
-    std::unique_ptr<AttentionOptimiser> attention_optimiser;
-    std::unique_ptr<MLPOptimiser> mlp_optimiser;
-    std::unique_ptr<Loss> loss;
+    std::shared_ptr<GRUOptimiser> gru_optimiser;
+    std::shared_ptr<AttentionOptimiser> attention_optimiser;
+    std::shared_ptr<MLPOptimiser> mlp_optimiser;
+    std::shared_ptr<LRScheduler> learning_rate_scheduler;
+    std::shared_ptr<Loss> loss;
 
    public:
     Predictor(size_t input_size, size_t hidden_size, size_t attention_size, size_t output_size, std::vector<int> mlp_topology,
@@ -1648,13 +1742,20 @@ class Predictor {
           output_size(output_size) {}
 
     // set optimiser - call before training
-    void set_gru_optimiser(std::unique_ptr<GRUOptimiser> new_optimiser) { gru_optimiser = std::move(new_optimiser); }
+    void set_gru_optimiser(std::shared_ptr<GRUOptimiser> new_optimiser) { gru_optimiser = new_optimiser; }
     // set optimiser - call before training
-    void set_attention_optimiser(std::unique_ptr<AttentionOptimiser> new_optimiser) {
-        attention_optimiser = std::move(new_optimiser);
+    void set_attention_optimiser(std::shared_ptr<AttentionOptimiser> new_optimiser) {
+        attention_optimiser = new_optimiser;
     }
     // set optimiser - call before training
-    void set_mlp_optimiser(std::unique_ptr<MLPOptimiser> new_optimiser) { mlp_optimiser = std::move(new_optimiser); }
+    void set_mlp_optimiser(std::shared_ptr<MLPOptimiser> new_optimiser) { mlp_optimiser = new_optimiser; }
+    
+    // set learning rate scheduler - optional call before training
+    void set_learning_rate_scheduler(std::shared_ptr<LRScheduler> new_scheduler) { 
+        learning_rate_scheduler = new_scheduler;
+        learning_rate_scheduler->set_optimisers(gru_optimiser, mlp_optimiser, attention_optimiser);
+    }
+
     // set loss function - call before training
     void set_loss(std::unique_ptr<Loss> new_loss) { loss = std::move(new_loss); }
 
@@ -1884,6 +1985,11 @@ class Predictor {
 
                 // update parameters
                 update_parameters(averaged_gru_gradients, averaged_mlp_gradients, averaged_attention_gradients);
+
+                // update learning rates if scheduler exists
+                if (learning_rate_scheduler) {
+                    learning_rate_scheduler->step();
+                }
 
                 batch_count++;
 
@@ -2134,6 +2240,9 @@ class Predictor {
 };
 
 
+// GET SOME LEARNING RATE SCHEDULING GOING!!
+
+
 int main() {
     // load embeddings and training data
     // paths are relative to compiled executable location
@@ -2154,9 +2263,24 @@ int main() {
     const std::vector<std::string> mlp_activation_functions = {"relu", "relu", "softmax"};
 
     Predictor predictor(input_features, hidden_size, attention_size, output_size, mlp_topology, mlp_activation_functions);
-    predictor.set_gru_optimiser(std::make_unique<GRUAdamWOptimiser>(0.001, 0.9, 0.999, 1e-6, 0.003, 1.0));
-    predictor.set_attention_optimiser(std::make_unique<AttentionAdamWOptimiser>(0.001, 0.9, 0.999, 1e-6, 0.003, 1.0));
-    predictor.set_mlp_optimiser(std::make_unique<MLPAdamWOptimiser>(0.001, 0.9, 0.999, 1e-6, 0.003, 1.0));
+    
+    const float initial_learning_rate = 0.001;
+    const float beta1 = 0.9;
+    const float beta2 = 0.999;
+    const float epsilon = 1e-6;
+    const float weight_decay = 0.003;
+    const float clip_norm = 1.0;
+
+    predictor.set_gru_optimiser(std::make_unique<GRUAdamWOptimiser>(initial_learning_rate, beta1, beta2, epsilon, weight_decay, clip_norm));
+    predictor.set_attention_optimiser(std::make_unique<AttentionAdamWOptimiser>(initial_learning_rate, beta1, beta2, epsilon, weight_decay, clip_norm));
+    predictor.set_mlp_optimiser(std::make_unique<MLPAdamWOptimiser>(initial_learning_rate, beta1, beta2, epsilon, weight_decay, clip_norm));
+
+    // LR scheduler overrides learning rates of optimisers
+    // currently step is called every batch - adjust appropriately
+
+    const float end_learning_rate = 0.00005;
+    const int duration = 16000;
+    predictor.set_learning_rate_scheduler(std::make_unique<LinearLRScheduler>(initial_learning_rate, end_learning_rate, duration));
     predictor.set_loss(std::make_unique<CrossEntropyLoss>());
 
     predictor.train_with_batches(training_loader, test_loader, epochs);
